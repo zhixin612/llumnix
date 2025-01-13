@@ -146,6 +146,10 @@ class Manager:
             asyncio.create_task(self._auto_scale_up_loop(AUTO_SCALE_UP_INTERVAL))
             asyncio.create_task(self._check_deployment_states_loop(CHECK_DEPLOYMENT_STATES_INTERVAL))
 
+    def __repr__(self):
+        # Customizing prefixes for Actor logs.
+        return f"{self.__class__.__name__}(node_id={self.node_id[:5]})"
+
     async def generate(self, request_id: str, server_info: ServerInfo, *args, **kwargs,) -> None:
         while self.num_instances == 0:
             logger.warning("No instance available now, sleep {}s, "

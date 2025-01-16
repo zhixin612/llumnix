@@ -40,7 +40,8 @@ from llumnix.internal_config import MigrationConfig
 from llumnix.queue.utils import QueueType
 from llumnix.backends.utils import AsyncPutQueueActor
 from llumnix.utils import get_instance_name
-from llumnix.constants import constants
+from llumnix import constants
+from llumnix.metrics.timestamps import set_timestamp
 
 logger = init_logger(__name__)
 
@@ -141,9 +142,9 @@ class LLMEngineLlumnix(_AsyncLLMEngine):
             request_outputs = list(request_outputs)
             server_infos = list(server_infos)
         for request_output, server_info in zip(request_outputs, server_infos):
+            # Assign request_timestamps from server_infos to request_outputs.
             if hasattr(server_info, 'request_timestamps'):
                 request_output.request_timestamps = server_info.request_timestamps
-                request_output.request_timestamps.engine_process_model_outputs_timestamp_end = time.time()
             if request_output.finished:
                 logger.info("engine finished request {}".format(request_output.request_id))
         for server_info in server_infos:
@@ -174,16 +175,12 @@ class LLMEngineLlumnix(_AsyncLLMEngine):
 
         self.instance_info = instance_info
 
-        for request_output in request_outputs:
-            if hasattr(request_output, 'request_timestamps'):
-                request_output.request_timestamps.engine_put_queue_timestamp = time.time()
+        set_timestamp(request_outputs, 'engine_put_queue_timestamp', time.time())
 
         if request_outputs:
             self.put_queue_args_queue.put_nowait((request_outputs, server_infos))
 
-        for request_output in request_outputs:
-            if hasattr(request_output, 'request_timestamps'):
-                request_output.request_timestamps.engine_step_postprocess_timestamp_end = time.time()
+        set_timestamp(request_outputs, 'engine_step_postprocess_timestamp_end', time.time())
 
         return request_outputs, server_infos
 
@@ -209,17 +206,15 @@ class LLMEngineLlumnix(_AsyncLLMEngine):
         if hasattr(server_info, 'request_timestamps'):
             server_info.request_timestamps.engine_add_request_timestamp = time.time()
         self.scheduler[0].waiting[-1] = SequenceGroupLlumnix(request_id, server_info, expected_steps, [seq_group.get_seqs()[0]],
-                                                          seq_group.metrics.arrival_time, seq_group.sampling_params, seq_group.lora_request,
-                                                          seq_group.trace_headers, seq_group.prompt_adapter_request, seq_group.encoder_seq,
-                                                          seq_group.priority)
+                                                             seq_group.metrics.arrival_time, seq_group.sampling_params, seq_group.lora_request,
+                                                             seq_group.trace_headers, seq_group.prompt_adapter_request, seq_group.encoder_seq,
+                                                             seq_group.priority)
 
     def _start_put_queue_loop(self):
         while True:
             args = self.put_queue_args_queue.get()
             request_outputs, server_infos = args
-            for request_output in request_outputs:
-                if hasattr(request_output, 'request_timestamps'):
-                    request_output.request_timestamps.engine_thread_put_queue_timestamp = time.time()
+            set_timestamp(request_outputs, 'engine_thread_put_queue_timestamp', time.time())
             self._put_request_outputs_to_server(request_outputs, server_infos)
 
     def _put_request_outputs_to_server(self, request_outputs: List[RequestOutput], server_infos: List[ServerInfo]) -> None:

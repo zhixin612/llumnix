@@ -280,7 +280,7 @@ def get_instance_info_migrate_out(instance_id):
     instance_info.instance_type = InstanceType.NO_CONSTRAINTS
     return instance_info
 
-def test_update_instance_info_loop_and_migrate(ray_env, manager):
+def test_poll_instance_info_loop_and_migrate(ray_env, manager):
     num_instances = 5
     instance_ids, instances = init_instances(num_instances)
 

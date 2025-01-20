@@ -606,7 +606,7 @@ class Manager:
             except Exception as e:
                 logger.error("Unexpected exception: {}".format(e))
                 logger.error("Exception traceback: {}".format(traceback.format_exc()))
-                self._clear_instance_ray_resources(instance_id)
+                self._clear_instance_ray_states(instance_id)
 
         request_output_queue_type = QueueType(self.entrypoints_args.request_output_queue_type)
         instance = self._init_instance(instance_id, placement_group, request_output_queue_type, self.backend_type, self.engine_args)

@@ -541,7 +541,7 @@ class Manager:
             placement_group = initialize_placement_group(placement_group_name,
                                                          num_cpus=3+int(init_server), num_gpus=world_size, detached=True, block=block)
         else:
-            # num_cpus=1, for Llumlet + AsyncPutQueueActor
+            # num_cpus=2, for Llumlet + AsyncPutQueueActor
             placement_group = initialize_placement_group(placement_group_name,
                                                          num_cpus=2+int(init_server), num_gpus=0, detached=True, block=block)
 

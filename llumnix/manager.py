@@ -43,7 +43,7 @@ from llumnix.entrypoints.utils import LaunchMode
 from llumnix.backends.utils import get_engine_world_size
 from llumnix.queue.queue_type import QueueType
 from llumnix.entrypoints.vllm.api_server_actor import APIServerActor
-from llumnix.constants import (CLEAR_REQUEST_INSTANCE_INTERVAL, NO_INSTANCE_RETRY_INTERVAL,
+from llumnix.constants import (CLEAR_REQUEST_INSTANCE_INTERVAL, NO_INSTANCE_RETRY_GENERATE_INTERVAL,
                                WAIT_ALL_MIGRATIONS_DONE_INTERVAL, AUTO_SCALE_UP_INTERVAL,
                                WAIT_PLACEMENT_GROUP_TIMEOUT, CHECK_DEPLOYMENT_STATES_INTERVAL,
                                WATCH_DEPLOYMENT_INTERVAL, WATCH_DEPLOYMENT_INTERVAL_PENDING_INSTANCE)
@@ -149,8 +149,8 @@ class Manager:
     async def generate(self, request_id: str, server_info: ServerInfo, *args, **kwargs,) -> None:
         while self.num_instances == 0:
             logger.warning("No instance available now, sleep {}s, "
-                           "and regenerate request {}.".format(NO_INSTANCE_RETRY_INTERVAL, request_id))
-            await asyncio.sleep(NO_INSTANCE_RETRY_INTERVAL)
+                           "and regenerate request {}.".format(NO_INSTANCE_RETRY_GENERATE_INTERVAL, request_id))
+            await asyncio.sleep(NO_INSTANCE_RETRY_GENERATE_INTERVAL)
 
         instance_id, request_expected_steps = self.global_scheduler.dispatch()
         try:

@@ -114,6 +114,7 @@ class ScalingScheduler:
                 return instance_type
         return self.add_instance(instance_id)
 
+
 class ScalePolicy(ABC):
     def __init__(self,
                  instance_load_calculator: InstanceLoadCalculator) -> None:
@@ -146,12 +147,15 @@ class MaxLoad(ScalePolicy):
 
     def compute_load_metric_down(self, instance_infos: List[InstanceInfo]) -> float:
         return max([i.instance_load_dispatch_scale for i in instance_infos])
+
+
 class MinLoad(ScalePolicy):
     def compute_load_metric_up(self, instance_infos: List[InstanceInfo]) -> float:
         return min([i.instance_load_dispatch_scale for i in instance_infos])
 
     def compute_load_metric_down(self, instance_infos: List[InstanceInfo]) -> float:
         return min([i.instance_load_dispatch_scale for i in instance_infos])
+
 
 class AvgLoad(ScalePolicy):
     def compute_load_metric_up(self, instance_infos: List[InstanceInfo]) -> float:
@@ -176,6 +180,7 @@ class AvgLoad(ScalePolicy):
         tot_instance_info.num_blocks_all_waiting_requests = sum([i.num_blocks_all_waiting_requests for i in instance_infos])
         tot_instance_info.num_available_gpu_blocks = tot_instance_info.num_free_gpu_blocks - tot_instance_info.num_watermark_blocks
         return self.instance_load_calculator.compute_instance_load(tot_instance_info, action='scale')
+
 
 class ScalePolicyFactory:
     _POLICY_REGISTRY = {

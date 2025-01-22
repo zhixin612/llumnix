@@ -40,7 +40,7 @@ class ScalingScheduler:
         self.scale_up_threshold = scale_up_threshold
         self.scale_down_threshold = scale_down_threshold
         self.scaling_policy = ScalePolicyFactory.get_policy(scaling_policy,
-                                                          instance_load_calculator=instance_load_calculator)
+                                                            instance_load_calculator=instance_load_calculator)
         self.instance_load_calculator = instance_load_calculator
 
         self.num_instances = 0

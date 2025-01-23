@@ -34,17 +34,17 @@ class DispatchScheduler:
         self.num_dispatch_instances = num_dispatch_instances
         # instance info args
         self.instance_info: Dict[str, InstanceInfo] = {}
-        self.sorted_instance_infos: List[InstanceInfo] = None
+        self.available_instance_infos: List[InstanceInfo] = None
         # statistics
         self.num_requests = 0
         self.instance_num_requests: Dict[str, int] = {}
 
     def dispatch(self) -> str:
         self.num_requests += 1
-        if isinstance(self.dispatch_policy, (Load, Queue)):
-            self._sort_instance_infos(descending=False)
+        instance_infos: List[InstanceInfo] = list(self.instance_info.values())
+        self.available_instance_infos = [info for info in instance_infos if info.instance_id in self.available_dispatch_instance_set]
         dispatch_instance_id = self.dispatch_policy.dispatch(self.instance_num_requests,
-                                                             self.sorted_instance_infos)
+                                                             self.available_instance_infos)
         self.instance_num_requests[dispatch_instance_id] += 1
         if self.num_requests % 100 == 0:
             logger.info("num_requests: {}".format(self.num_requests))
@@ -59,7 +59,6 @@ class DispatchScheduler:
     def add_instance(self, instance_id: str) -> None:
         self.instance_id_set.add(instance_id)
         self.num_instances = len(self.instance_id_set)
-
         # TODO(KuilongCui): a hacky method is being used to avoid the only-decode type engine dispatched
         if "decode" not in instance_id:
             if self.num_dispatch_instances <= 0 or (self.num_dispatch_instances > 0 and
@@ -81,19 +80,14 @@ class DispatchScheduler:
                 free_instance_id = next(iter(self.instance_id_set - self.available_dispatch_instance_set))
                 self.available_dispatch_instance_set.add(free_instance_id)
 
-    def _sort_instance_infos(self,
-                            descending: bool = True) -> None:
-        instance_infos: List[InstanceInfo] = list(self.instance_info.values())
-        available_instance_infos = [info for info in instance_infos if info.instance_id in self.available_dispatch_instance_set]
-        if isinstance(self.dispatch_policy, Queue):
-            key_attr = 'num_waiting_requests'
-        else:
-            key_attr = 'instance_load_dispatch_scale'
-        self.sorted_instance_infos = sorted(
-            available_instance_infos,
-            key=lambda instance_info: getattr(instance_info, key_attr),
-            reverse=descending
-        )
+def sort_instance_infos(available_instance_infos: List[InstanceInfo],
+                        key_attr: str,
+                        descending: bool = False) -> None:
+    return sorted(
+        available_instance_infos,
+        key=lambda instance_info: getattr(instance_info, key_attr),
+        reverse=descending
+    )
 
 class DispatchPolicy(ABC):
     def __init__(self):
@@ -102,21 +96,21 @@ class DispatchPolicy(ABC):
     @abstractmethod
     def dispatch(self,
                  instance_num_requests: Dict[str, int],
-                 sorted_instance_infos: List[InstanceInfo]) -> int:
+                 available_instance_infos: List[InstanceInfo]) -> int:
         pass
 
 # Dispatch all requests to a single instance, used only for testing
 class Flood(DispatchPolicy):
     def dispatch(self,
                  instance_num_requests: Dict[str, int],
-                 sorted_instance_infos: List[InstanceInfo]) -> str:
+                 available_instance_infos: List[InstanceInfo]) -> str:
         instance_id = max(instance_num_requests, key=instance_num_requests.get)
         return instance_id
 
 class Balanced(DispatchPolicy):
     def dispatch(self,
                  instance_num_requests: Dict[str, int],
-                 sorted_instance_infos: List[InstanceInfo]) -> str:
+                 available_instance_infos: List[InstanceInfo]) -> str:
         # dispatch request according to the number of requests dispatched to instance by manager
         instance_id = min(instance_num_requests, key=instance_num_requests.get)
         return instance_id
@@ -124,7 +118,8 @@ class Balanced(DispatchPolicy):
 class Load(DispatchPolicy):
     def dispatch(self,
                  instance_num_requests: Dict[str, int],
-                 sorted_instance_infos: List[InstanceInfo]) -> str:
+                 available_instance_infos: List[InstanceInfo]) -> str:
+        sorted_instance_infos = sort_instance_infos(available_instance_infos, 'instance_load_dispatch_scale')
         instance_id = sorted_instance_infos[0].instance_id
         logger.info("dispatch to {}, load: {}".format(instance_id, sorted_instance_infos[0].instance_load_dispatch_scale))
         return instance_id
@@ -132,7 +127,8 @@ class Load(DispatchPolicy):
 class Queue(DispatchPolicy):
     def dispatch(self,
                  instance_num_requests: Dict[str, int],
-                 sorted_instance_infos: List[InstanceInfo]) -> str:
+                 available_instance_infos: List[InstanceInfo]) -> str:
+        sorted_instance_infos = sort_instance_infos(available_instance_infos, 'num_waiting_requests')
         min_queue_size = sorted_instance_infos[0].num_waiting_requests
         instance_id_list = []
         for instance_info in sorted_instance_infos:
@@ -147,7 +143,7 @@ class RoundRobin(DispatchPolicy):
 
     def dispatch(self,
                  instance_num_requests: Dict[str, int],
-                 sorted_instance_infos: List[InstanceInfo]) -> str:
+                 available_instance_infos: List[InstanceInfo]) -> str:
         all_instance_ids = sorted(instance_num_requests.keys())
         cur_instance_idx = (self.prev_instance_idx + 1) % len(all_instance_ids)
 

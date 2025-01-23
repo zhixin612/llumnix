@@ -87,6 +87,8 @@ _C.MANAGER.ENABLE_PORT_OFFSET_STORE = False
 _C.MANAGER.LOAD_METRIC = 'remaining_steps'
 # Request dispatch policy
 _C.MANAGER.DISPATCH_POLICY = 'load'
+# Number of candidate instances for dispatch policy
+_C.MANAGER.POWER_OF_K_CHOICE = 1
 
 # -----------------------------------------------------------------------------
 # MIGRATION CONFIGURATION

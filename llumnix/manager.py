@@ -269,6 +269,7 @@ class Manager:
                     self.request_instance[migrate_out_request_id] = migrate_instance_pair[1]
                 logger.info("Instance {}->{} migrate done, migrate request {}".format(
                     migrate_instance_pair[0], migrate_instance_pair[1], migrate_out_request_ids))
+
         def migrate_done_callback_wrapper(migrate_instance_pair: Tuple[str, str], fut) -> None:
             ret = fut.result()[0]
             loop = asyncio.get_event_loop()
@@ -320,7 +321,9 @@ class Manager:
                     self.scale_down(instance_id)
                 alive_pg_states = list_placement_groups(filters=[("state", "!=", "REMOVED")])
                 if self.max_instances != -1 and len(alive_pg_states) >= self.max_instances:
-                    time.sleep(interval)
+                    logger.debug("The number of alive placement groups has reached the max_instances.")
+                    await asyncio.sleep(interval)
+                    continue
                 if new_pg is None:
                     new_instance_id = random_uuid()
                     new_pg = self._init_placement_group(get_placement_group_name(new_instance_id), self.engine_args, self.backend_type,
@@ -538,13 +541,12 @@ class Manager:
                               init_server: bool = False,
                               block: bool = True) -> PlacementGroup:
         if not BackendType.is_sim_backend(backend_type):
-            # num_cpus=3, for Llumlet + AsyncPutQueueActor + ProxyActor
+            # num_cpus=2+(0/1), for Llumlet + AsyncPutQueueActor + (ApiServerActor)
             # num_gpus=world_size, for world_size Workers
             world_size = get_engine_world_size(engine_args, backend_type)
             placement_group = initialize_placement_group(placement_group_name,
-                                                         num_cpus=3+int(init_server), num_gpus=world_size, detached=True, block=block)
+                                                         num_cpus=2+int(init_server), num_gpus=world_size, detached=True, block=block)
         else:
-            # num_cpus=2, for Llumlet + AsyncPutQueueActor
             placement_group = initialize_placement_group(placement_group_name,
                                                          num_cpus=2+int(init_server), num_gpus=0, detached=True, block=block)
 

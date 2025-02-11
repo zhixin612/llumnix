@@ -116,8 +116,8 @@ def init_manager():
     ray.get(manager.is_ready.remote())
     return manager
 
-def init_manager_with_launch_mode(launch_mode, request_output_queue_type="rayqueue"):
-    manager_args = ManagerArgs(migration_backend="rayrpc", enable_port_increment=True)
+def init_manager_with_launch_mode(launch_mode, request_output_queue_type="rayqueue", max_instances=-1):
+    manager_args = ManagerArgs(migration_backend="rayrpc", enable_port_increment=True, max_instances=max_instances)
     entrypoints_args = EntrypointsArgs(host="127.0.0.1", port=8000, request_output_queue_type=request_output_queue_type)
     engine_args = EngineArgs(model="facebook/opt-125m", worker_use_ray=True)
     launch_args = LaunchArgs(launch_mode=launch_mode, backend_type=BackendType.VLLM)
@@ -393,3 +393,9 @@ def test_check_deployment_states_loop_and_auto_scale_up_loop(ray_env, request_ou
     assert num_instances == 4
     curr_pgs, curr_servers, curr_instances = ray.get(manager._get_cluster_deployment.remote())
     assert len(curr_pgs) == 4 and len(curr_servers) == 4 and len(curr_instances) == 4
+
+def test_auto_scale_up_loop_max_instances(ray_env):
+    manager, _, _, _, _ = init_manager_with_launch_mode(LaunchMode.GLOBAL, "rayqueue", max_instances=2)
+    time.sleep(30.0)
+    num_instances = ray.get(manager.scale_up.remote([], []))
+    assert num_instances == 2

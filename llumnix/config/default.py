@@ -100,7 +100,7 @@ _C.MANAGER.ENABLE_DEFRAG = False
 # Pair migration frequency
 _C.MANAGER.PAIR_MIGRATION_FREQUENCY = 1
 # Pair migration policy
-_C.MANAGER.PAIR_MIGRATION_POLICY = 'defrag_constrained'
+_C.MANAGER.PAIR_MIGRATION_POLICY = 'defrag'
 # Migrate out instance load threshold
 _C.MANAGER.MIGRATE_OUT_THRESHOLD = 3.0
 # Request migration policy

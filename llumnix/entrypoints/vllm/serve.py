@@ -1,9 +1,11 @@
-
+import os
 import time
+
+import ray
 from ray.util.queue import Queue as RayQueue
 
 from llumnix.entrypoints.vllm.arg_utils import add_cli_args, get_args
-from llumnix.entrypoints.setup import connect_to_ray_cluster
+from llumnix.entrypoints.setup import connect_to_ray_cluster, launch_ray_cluster
 from llumnix.config import get_llumnix_config
 from llumnix.arg_utils import LlumnixArgumentParser, LaunchArgs
 from llumnix.entrypoints.utils import LaunchMode
@@ -25,10 +27,21 @@ if __name__ == "__main__":
     cfg = get_llumnix_config(cli_args.config_file, cli_args)
     entrypoints_args, manager_args, instance_args, engine_args = get_args(cfg, LaunchMode.GLOBAL, parser, cli_args)
 
+    # save config to tensorboard
+    if manager_args.log_tensorboard_dir is not None:
+        import tensorboardX
+        writer = tensorboardX.SummaryWriter(manager_args.log_tensorboard_dir, filename_suffix='.manager')
+        writer.add_text('config/entrypoints_args', str(entrypoints_args))
+        writer.add_text('config/manager_args', str(manager_args))
+        writer.add_text('config/instance_args', str(instance_args))
+        writer.add_text('config/engine_args', str(engine_args))
+        writer.close()
+
     backend_type = BackendType.VLLM if not instance_args.simulator_mode else BackendType.SIM_VLLM
     launch_args = LaunchArgs(launch_mode=LaunchMode.GLOBAL, backend_type=BackendType.VLLM)
 
     # Assume that there is an existing ray cluster when using centralized deployment.
+    launch_ray_cluster(entrypoints_args.ray_cluster_port)  # Zhixin: launch_ray_cluster
     connect_to_ray_cluster()
 
     # magic actor to avoid fast api server actor initialization error
@@ -38,6 +51,13 @@ if __name__ == "__main__":
     setup_llumnix(entrypoints_args, manager_args, instance_args, engine_args, launch_args)
 
     # keep the process alive to get the terminal output.
-    if not entrypoints_args.disable_keep_serve_process_alive:
-        while True:
-            time.sleep(100.0)
+    try:
+        if not entrypoints_args.disable_keep_serve_process_alive:
+            while True:
+                time.sleep(100.0)
+    except KeyboardInterrupt:
+        # Zhixin: kill remaining actors
+        ray.shutdown()
+        os.system("pkill -9 -f 'ray'")
+        os.system("pkill -9 -f 'python'")
+        os.system("pkill -9 -f 'gcs_server'")

@@ -40,6 +40,7 @@ logger = init_logger(__name__)
 class Llumlet:
     def __init__(self,
                  instance_id: str,
+                 instance_id_str: str,  # ZhiXin: add instance_id_str for tensorboard
                  instance_args: InstanceArgs,
                  placement_group: PlacementGroup,
                  request_output_queue_type: QueueType,
@@ -51,6 +52,8 @@ class Llumlet:
             self.actor_id = ray.get_runtime_context().get_actor_id()
             self.node_id = ray.get_runtime_context().get_node_id()
             self.instance_id = instance_id
+            # ZhiXin: add instance_id_str for tensorboard
+            self.instance_id_str = instance_args.instance_type[0].upper() + instance_id_str
             logger.info("Llumlet(job_id={}, worker_id={}, actor_id={}, node_id={}, instance_id={})".format(
                             self.job_id, self.worker_id, self.actor_id, self.node_id, self.instance_id))
             logger.info("Llumlet backend type: {}".format(backend_type))
@@ -89,6 +92,7 @@ class Llumlet:
     @classmethod
     def from_args(cls,
                   instance_id: str,
+                  instance_id_str: str,  # ZhiXin: add instance_id_str for tensorboard
                   instance_args: InstanceArgs,
                   placement_group: PlacementGroup,
                   request_output_queue_type: QueueType,
@@ -115,6 +119,7 @@ class Llumlet:
                                             )
                                         )
             llumlet = llumlet_class.remote(instance_id,
+                                           instance_id_str,  # ZhiXin: add instance_id_str for tensorboard
                                            instance_args,
                                            placement_group,
                                            request_output_queue_type,
@@ -201,6 +206,7 @@ class Llumlet:
     # TODO(KuilongCui): only the metrics-related information needs to be synchronously loaded for the manager
     def get_instance_info(self) -> InstanceInfo:
         instance_info: InstanceInfo = self.backend_engine.engine.instance_info
+        instance_info.instance_id_str = self.instance_id_str  # ZhiXin: add instance_id_str for tensorboard
         instance_info.instance_type = self.instance_args.instance_type
         self.instance_load_calculator.compute_instance_load(instance_info)
         return instance_info

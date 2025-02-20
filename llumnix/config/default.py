@@ -67,13 +67,15 @@ _C.MANAGER.DISABLE_LOG_REQUESTS_MANAGER = False
 _C.MANAGER.LOG_INSTANCE_INFO = False
 # Log filename
 _C.MANAGER.LOG_FILENAME = "server.log"
+# Zhixin: Logdir for tensorboard, default = None
+_C.MANAGER.LOG_TENSORBOARD_DIR = None
 # Enable port increment when deploying multiple servers
 _C.MANAGER.ENABLE_PORT_INCREMENT = False
 # Enable store port offset when deploying multiple servers
 _C.MANAGER.ENABLE_PORT_OFFSET_STORE = False
 # Enable prefill decoding disaggregation
 _C.MANAGER.ENABLE_PD_DISAGG = False
-# The p:d ratio used in gloabl launch model
+# The p:d ratio used in gloabl launch mode
 _C.MANAGER.PD_RATIO = "1:1"
 
 # -------------------------- DISPATCH CONFIGURATION ---------------------------

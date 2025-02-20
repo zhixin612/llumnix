@@ -18,7 +18,7 @@ def add_cli_args(parser: LlumnixArgumentParser):
     cli_args = parser.parse_args()
     return cli_args
 
-def get_args(cfg, launch_model, parser, cli_args):
+def get_args(cfg, launch_mode, parser, cli_args):
     engine_args = AsyncEngineArgs.from_cli_args(cli_args)
     instance_args: InstanceArgs = InstanceArgs.from_llumnix_config(cfg)
     instance_args.init_from_engine_args(engine_args, BackendType.VLLM)
@@ -28,7 +28,7 @@ def get_args(cfg, launch_model, parser, cli_args):
 
     EntrypointsArgs.check_args(entrypoints_args, parser)
     ManagerArgs.check_args(manager_args, parser)
-    InstanceArgs.check_args(instance_args, manager_args, launch_model, parser)
+    InstanceArgs.check_args(instance_args, manager_args, launch_mode, parser)
     check_engine_args(engine_args, instance_args)
 
     logger.info("entrypoints_args: {}".format(entrypoints_args))

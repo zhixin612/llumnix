@@ -1,0 +1,132 @@
+# -----------------------------------------------------------------------------
+# SERVER CONFIGURATION
+# -----------------------------------------------------------------------------
+SERVER:
+  # Hostname for the server
+  HOST: "localhost"
+  # Port number for the server
+  PORT: 18000
+  # Path to SSL key file
+  SSL_KEYFILE: None
+  # Path to SSL certificate file
+  SSL_CERTFILE: None
+  # Log level for the server
+  LOG_LEVEL: "info"
+  # Queue type for request output queue
+  REQUEST_OUTPUT_QUEUE_TYPE: "rayqueue"
+  # Port number for the zmq request output queue
+  REQUEST_OUTPUT_QUEUE_PORT: 1234
+  # Disable logging requests in server
+  DISABLE_LOG_REQUESTS_SERVER: False
+  # Enable logging request timestamp
+  LOG_REQUEST_TIMESTAMPS: True  # Zhixin
+  # Path to config file of arguments
+  CONFIG_FILE: None
+  # Disable keep serve process alive
+  DISABLE_KEEP_SERVE_PROCESS_ALIVE: False
+
+  # ----------------------------- RAY CONFIGURATION -----------------------------
+  # If True, launch Ray cluster in API server
+  LAUNCH_RAY_CLUSTER: True  # Zhixin
+  # Port number for the Ray cluster
+  RAY_CLUSTER_PORT: 6379
+  # Disable redirecting all worker logs to driver
+  DISABLE_LOG_TO_DRIVER: False
+
+# -----------------------------------------------------------------------------
+# MANAGER CONFIGURATION
+# -----------------------------------------------------------------------------
+MANAGER:
+  # Number of instances created at initialization
+  INITIAL_INSTANCES: 1  # Zhixin
+  # Time interval(s) to update instance info and pair migration
+  POLLING_INTERVAL: 0.05
+  # Disable logging requests in manager
+  DISABLE_LOG_REQUESTS_MANAGER: False
+  # Enable logging instance info
+  LOG_INSTANCE_INFO: True  # Zhixin: board will be enabled only when this is True
+  # Log filename
+  LOG_FILENAME: "/root/llm/disagg/llumnix/examples/logs/test_0220" # test_1P3D_sharegpt-1k_qps6-poi_0219
+  # Zhixin: Logdir for tensorboard, default = None
+  LOG_TENSORBOARD_DIR: "/root/llm/disagg/llumnix/examples/logs/test_0220" # test_1P3D_sharegpt-1k_qps6-poi_0219
+  # Enable port increment when deploying multiple servers
+  ENABLE_PORT_INCREMENT: False
+  # Enable store port offset when deploying multiple servers
+  ENABLE_PORT_OFFSET_STORE: False
+  # Enable prefill decoding disaggregation
+  ENABLE_PD_DISAGG: True  # Zhixin
+  # The p:d ratio used in gloabl launch model
+  PD_RATIO: "1:3"
+
+  # -------------------------- DISPATCH CONFIGURATION ---------------------------
+  # Request dispatch policy
+  DISPATCH_POLICY: 'load'
+
+  # -------------------------- MIGRATION CONFIGURATION --------------------------
+  # Enable migrate requests between instances
+  ENABLE_MIGRATION: True  # Zhixin
+  # Pair migration frequency
+  PAIR_MIGRATION_FREQUENCY: 1
+  # Pair migration policy
+  PAIR_MIGRATION_POLICY: 'defrag_constrained'
+  # Migrate out instance load threshold
+  MIGRATE_OUT_THRESHOLD: -3.0
+
+  # --------------------------- SCALING CONFIGURATION ---------------------------
+  # Enable auto scaling
+  ENABLE_SCALING: False
+  # Instance scaling load metric
+  SCALING_LOAD_METRIC: 'remaining_steps'
+  # Minimum number of instances
+  MIN_INSTANCES: 1  # Zhixin
+  # Maximum number of instances
+  MAX_INSTANCES: 1  # Zhixin
+  # Interval time to check scaling
+  SCALING_INTERVAL: 10
+  # Scaling policy
+  SCALING_POLICY: 'avg_load'
+  # Scale up threshold
+  SCALE_UP_THRESHOLD: -10
+  # Scale down threshold
+  SCALE_DOWN_THRESHOLD: -60
+
+# -----------------------------------------------------------------------------
+# INSTANCE CONFIGURATION
+# -----------------------------------------------------------------------------
+INSTANCE:
+  # Engine types: prefill, decode, no_constraints
+#  INSTANCE_TYPE: "no_constraints"  # Zhixin
+  # Enable simulator mode
+  SIMULATOR_MODE: False
+  # Profiling result file path when using simulator
+  PROFILING_RESULT_FILE_PATH: None
+
+  # ------------------------- LOAD METRICS CONFIGURATION ------------------------
+  # Instance dispatch load metric
+  DISPATCH_LOAD_METRIC: 'remaining_steps'
+  # Instance migration load metric
+  MIGRATION_LOAD_METRIC: 'remaining_steps'
+
+  # -------------------------- MIGRATION CONFIGURATION --------------------------
+  # Enable defragmentation through migration based on virtual usage
+  ENABLE_DEFRAG: True  # Zhixin
+  # Request migration policy
+  REQUEST_MIGRATION_POLICY: 'SR'
+  # Drop migration if the number of stages > migration_max_stages
+  MIGRATION_MAX_STAGES: 3
+  # If the number of remain blocks < migration_last_stage_max_blocks, do last stage migration
+  MIGRATION_LAST_STAGE_MAX_BLOCKS: 16
+  # Communication backend of migration
+  MIGRATION_BACKEND: "gloo"
+  # Number of cache blocks in migration
+  MIGRATION_BUFFER_BLOCKS: 512
+  # Number of kv-cache layers to transfer in each round during migration
+  MIGRATION_NUM_LAYERS: 1
+  # Timeout(s) for initializing migration backend
+  MIGRATION_BACKEND_INIT_TIMEOUT: 10.0
+  # Transfer type for migration backend kvTransfer
+  MIGRATION_BACKEND_TRANSFER_TYPE: "rdma"
+  # Address of grpc server for migration backend
+  GRPC_MIGRATION_BACKEND_SERVER_ADDRESS: "127.0.0.1:50051"
+  # URL of naming server for kvtransfer migration backend
+  KVTRANSFER_MIGRATION_BACKEND_NAMING_URL: "file:/tmp/llumnix/naming/"

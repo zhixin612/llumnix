@@ -21,6 +21,9 @@ from collections import defaultdict
 import traceback
 from functools import partial
 
+import numpy as np
+import tensorboardX
+
 import ray
 import ray.actor
 from ray.util.state import list_placement_groups, list_actors
@@ -30,13 +33,13 @@ from llumnix.logging.logger import init_logger
 from llumnix.global_scheduler.global_scheduler import GlobalScheduler
 from llumnix.global_scheduler.migration_scheduler import PairMigrationConstraints
 from llumnix.global_scheduler.migration_filter import CustomFilter
-from llumnix.instance_info import InstanceInfo
+from llumnix.instance_info import InstanceInfo, InstanceType
 from llumnix.arg_utils import ManagerArgs, EntrypointsArgs, InstanceArgs, LaunchArgs
 from llumnix.server_info import ServerInfo
 from llumnix.backends.backend_interface import BackendType
 from llumnix.utils import (random_uuid, clear_gloo_backend_state, get_instance_name,
                            get_manager_name, INSTANCE_NAME_PREFIX, get_placement_group_name,
-                           run_async_func_sync,)
+                           run_async_func_sync, )
 from llumnix.entrypoints.utils import LaunchMode
 from llumnix.queue.queue_type import QueueType
 from llumnix.constants import (CLEAR_REQUEST_INSTANCE_INTERVAL, NO_INSTANCE_RETRY_INTERVAL,
@@ -46,6 +49,7 @@ from llumnix.constants import (CLEAR_REQUEST_INSTANCE_INTERVAL, NO_INSTANCE_RETR
 from llumnix.launcher import Launcher
 
 logger = init_logger(__name__)
+
 
 # TODO(s5u13b): Handle exception of ray operations.
 
@@ -65,7 +69,7 @@ class Manager:
         self.actor_id = ray.get_runtime_context().get_actor_id()
         self.node_id = ray.get_runtime_context().get_node_id()
         logger.info("Manager(job_id={}, worker_id={}, actor_id={}, node_id={})".format(
-                        self.job_id, self.worker_id, self.actor_id, self.node_id))
+            self.job_id, self.worker_id, self.actor_id, self.node_id))
         self.actor_name = get_manager_name()
         self.manager_args = manager_args
 
@@ -103,6 +107,24 @@ class Manager:
         self.launcher: Launcher = Launcher(self.global_scheduler, manager_args.enable_port_increment,
                                            manager_args.enable_port_offset_store, manager_args.enable_pd_disagg,
                                            manager_args.enable_engine_pd_disagg, manager_args.pd_ratio)
+
+        # Zhixin: tensorboard logger
+        self.tensorboard_logdir = manager_args.log_tensorboard_dir
+        self.tensorboard_writer = None
+        if self.tensorboard_logdir is not None:
+            self.tensorboard_step = 0
+            os.makedirs(self.tensorboard_logdir, exist_ok=True)
+            self.tensorboard_writer = tensorboardX.SummaryWriter(
+                logdir=self.tensorboard_logdir,
+                filename_suffix=".manager",
+                flush_secs=5,
+            )
+            # set instance_id_str to instances for tensorboard
+            self.tensorboard_instance_id_str = {
+                InstanceType.PREFILL: 0,
+                InstanceType.DECODE: 0,
+                InstanceType.NO_CONSTRAINTS: 0,
+            }
 
         # log args
         self.log_requests = not manager_args.disable_log_requests_manager
@@ -145,7 +167,7 @@ class Manager:
             if self.manager_args.enable_pd_disagg:
                 asyncio.create_task(self._check_pd_deployment_states_loop(CHECK_DEPLOYMENT_STATES_INTERVAL))
 
-    async def generate(self, request_id: str, server_info: ServerInfo, *args, **kwargs,) -> None:
+    async def generate(self, request_id: str, server_info: ServerInfo, *args, **kwargs, ) -> None:
         while self.num_instances == 0:
             logger.warning("No instance available now, sleep {}s, "
                            "and regenerate request {}.".format(NO_INSTANCE_RETRY_INTERVAL, request_id))
@@ -155,7 +177,8 @@ class Manager:
         try:
             if hasattr(server_info, 'request_timestamps'):
                 server_info.request_timestamps.manager_generate_timestamp = time.time()
-            await self.instances[instance_id].generate.remote(request_id, server_info, request_expected_steps, *args, **kwargs)
+            await self.instances[instance_id].generate.remote(request_id, server_info, request_expected_steps, *args,
+                                                              **kwargs)
             if self.log_requests:
                 logger.info("manager receive request {}".format(request_id))
                 logger.info("dispath request {} to instance {}".format(request_id, instance_id))
@@ -220,7 +243,7 @@ class Manager:
                 self.num_instance_info_updates += 1
                 # Push migrate when the instance_info have updated a certain number of times.
                 if self.enable_migration and self.num_instance_info_updates != 0 \
-                    and self.num_instance_info_updates % self.pair_migration_frequency == 0:
+                        and self.num_instance_info_updates % self.pair_migration_frequency == 0:
                     asyncio.create_task(self._push_migrations())
                 if self.log_instance_info:
                     self._log_instance_infos_to_csv(instance_infos)
@@ -250,7 +273,8 @@ class Manager:
                     # TODO(s5u13b): Fix the clear_migration_states to adapt to the many-to-many migration.
                     if not has_error:
                         try:
-                            await self.instances[migrate_instance_pair[i]].clear_migration_states.remote(is_migrate_in=bool(i))
+                            await self.instances[migrate_instance_pair[i]].clear_migration_states.remote(
+                                is_migrate_in=bool(i))
                         except (ray.exceptions.RayActorError, ray.exceptions.RayTaskError, KeyError):
                             has_error = True
                 for i, has_error in enumerate(has_error_pair):
@@ -263,8 +287,11 @@ class Manager:
                 if migrate_out_request_ids:
                     migrate_out_request_id = migrate_out_request_ids[0]
                     self.request_instance[migrate_out_request_id] = migrate_instance_pair[1]
-                logger.info("instance {}->{} migrate done, migrate request {}".format(
-                    migrate_instance_pair[0], migrate_instance_pair[1], migrate_out_request_ids))
+
+                    # Zhixin: increase indent to avoid empty migration message
+                    logger.info("instance {}->{} migrate done, migrate request {}".format(
+                        migrate_instance_pair[0], migrate_instance_pair[1], migrate_out_request_ids))
+
         def migrate_done_callback_wrapper(migrate_instance_pair: Tuple[str, str], fut) -> None:
             ret = fut.result()
             loop = asyncio.get_event_loop()
@@ -280,8 +307,9 @@ class Manager:
                 self.instance_migrating[migrate_out_instance_id] = True
                 self.instance_migrating[migrate_in_instance_id] = True
                 migrate_in_instance_name = get_instance_name(migrate_in_instance_id)
-                task = asyncio.gather(self.instances[migrate_out_instance_id].migrate_out.remote(migrate_in_instance_name),
-                                      return_exceptions=True)
+                task = asyncio.gather(
+                    self.instances[migrate_out_instance_id].migrate_out.remote(migrate_in_instance_name),
+                    return_exceptions=True)
                 task.add_done_callback(partial(migrate_done_callback_wrapper, migrate_instance_pair))
                 migration_tasks.append(task)
             await asyncio.gather(*migration_tasks, return_exceptions=True)
@@ -312,8 +340,9 @@ class Manager:
                     self.scale_down(instance_id)
                 if new_pg is None:
                     new_instance_id = random_uuid()
-                    new_pg = self.launcher.init_placement_group(get_placement_group_name(new_instance_id), self.engine_args, self.backend_type,
-                                                        init_server=True, block=False)
+                    new_pg = self.launcher.init_placement_group(get_placement_group_name(new_instance_id),
+                                                                self.engine_args, self.backend_type,
+                                                                init_server=True, block=False)
                 try:
                     await asyncio.wait_for(new_pg.ready(), WAIT_PLACEMENT_GROUP_TIMEOUT)
                 except asyncio.TimeoutError:
@@ -323,10 +352,21 @@ class Manager:
                     self.last_timeout_instance_id = new_instance_id
                     await asyncio.sleep(interval)
                     continue
-                self.launcher.init_server_and_instance(new_instance_id, self.entrypoints_args, self.instance_args,
-                                                       self.engine_args, self.backend_type, new_pg,
+
+                # Zhixin: add instance_id_str for tensorboard
+                if self.tensorboard_writer is not None:
+                    next_instance_args = self.launcher._get_next_instance_args(self.instance_args)
+                    instance_type = next_instance_args.instance_type
+                    instance_id_str = str(self.tensorboard_instance_id_str[instance_type])
+                    self.tensorboard_instance_id_str[instance_type] += 1
+                else:
+                    instance_id_str = "NONE"
+
+                self.launcher.init_server_and_instance(new_instance_id, instance_id_str, self.entrypoints_args,
+                                                       self.instance_args, self.engine_args, self.backend_type, new_pg,
                                                        instance_finish_cb=self.scale_up)
-                logger.info("Deploy server and instance to new placement group done, instance_id: {}.".format(new_instance_id))
+                logger.info(
+                    "Deploy server and instance to new placement group done, instance_id: {}.".format(new_instance_id))
             # pylint: disable=broad-except
             except Exception as e:
                 logger.error("Unexpected exception: {}".format(e))
@@ -367,7 +407,7 @@ class Manager:
             group_name = random_uuid()
             instance_rank = {instance_id: index for index, instance_id in enumerate(alive_instances)}
             dead_instances.update(await run_task(alive_instances, "rebuild_migration_backend",
-                                                                  instance_rank, group_name))
+                                                 instance_rank, group_name))
             if len(dead_instances) == 0 and self.pending_rebuild_migration_instances == pending_task:
                 dead_instances.update(await run_task(alive_instances, "warmup"))
             if len(dead_instances) == 0:
@@ -379,14 +419,14 @@ class Manager:
             self.pending_rebuild_migration_instances = 0
             group_name = None
 
-        migration_filter: CustomFilter = self.global_scheduler.migration_scheduler\
+        migration_filter: CustomFilter = self.global_scheduler.migration_scheduler \
             .migration_filter.get_filter("migration_backend_init_filter")
         migration_filter.set_filter_condtition(
             src_filter=lambda instance_info: instance_info.instance_id in alive_instances,
             dst_filter=lambda instance_info: instance_info.instance_id in alive_instances)
 
         logger.info("Rebuild migration backend done, group_name: {}, alive instance ({}): {}."
-            .format(group_name, len(alive_instances), alive_instances))
+                    .format(group_name, len(alive_instances), alive_instances))
 
         # Restore migrate config
         self.enable_migration = origin_config
@@ -395,9 +435,9 @@ class Manager:
                  instance_actor_handle: Union[ray.actor.ActorHandle, List[ray.actor.ActorHandle]],
                  instance_arg: Union[InstanceArgs, Iterable[InstanceArgs]]) -> None:
         if isinstance(instance_id, str):
-            instance_id = [instance_id,]
-            instance_actor_handle = [instance_actor_handle,]
-            instance_arg = [instance_arg,]
+            instance_id = [instance_id, ]
+            instance_actor_handle = [instance_actor_handle, ]
+            instance_arg = [instance_arg, ]
         instance_ids = list(instance_id)
         instance_actor_handles = list(instance_actor_handle)
         instance_args = list(instance_arg)
@@ -421,14 +461,14 @@ class Manager:
         # caused by this scale-up (see rebuild_migration_backend for details). Therefore, we simply return in this case.
         # Specifically, for not group kind migration backend, there is no need to rebuild the group.
         if self.enable_migration and self.is_group_kind_migration_backend \
-            and indeed_update and no_pending_instance:
+                and indeed_update and no_pending_instance:
             asyncio.create_task(self._rebuild_migration_backend())
 
         return self.num_instances
 
     def scale_down(self, instance_id: Union[str, Iterable[str]], rebuild_migration_backend: bool = True) -> None:
         if isinstance(instance_id, str):
-            instance_id = [instance_id,]
+            instance_id = [instance_id, ]
         instance_ids = list(instance_id)
 
         indeed_update = False
@@ -521,18 +561,26 @@ class Manager:
                        backend_type: BackendType,
                        instance_args: InstanceArgs,
                        engine_args
-                      ) -> Tuple[List[str], List[Llumlet]]:
+                       ) -> Tuple[List[str], List[Llumlet]]:
         instance_ids: List[str] = []
         instances: List[Llumlet] = []
         for _ in range(self.manager_args.initial_instances):
+            # Zhixin: add instance_id_str
+            if self.tensorboard_writer is not None:
+                instance_id_str = self.tensorboard_instance_id_str[instance_args.instance_type]
+                self.tensorboard_instance_id_str[instance_args.instance_type] += 1
+            else:
+                instance_id_str = 999
+
             instance_id = random_uuid()
-            placement_group = self.launcher.init_placement_group(get_placement_group_name(instance_id), engine_args, backend_type)
-            instance = self.launcher.init_instance(instance_id, instance_args, placement_group, request_output_queue_type,
-                                           backend_type, engine_args)
+            placement_group = self.launcher.init_placement_group(get_placement_group_name(instance_id), engine_args,
+                                                                 backend_type)
+            instance = self.launcher.init_instance(instance_id, instance_id_str, instance_args, placement_group,
+                                                   request_output_queue_type, backend_type, engine_args)
             instance_ids.append(instance_id)
             instances.append(instance)
 
-        self.scale_up(instance_ids, instances, [instance_args]*len(instance_ids))
+        self.scale_up(instance_ids, instances, [instance_args] * len(instance_ids))
 
         return instance_ids, instances
 
@@ -547,13 +595,15 @@ class Manager:
             scale_down_instance_id = random.choice(list(decode_instance_ids))
             logger.info("[_inner_check_pd_deployment] pd_ratio: {}, cur_num_prefill: {}, cur_num_decode: {}, "
                         "all decode, scale down decode instance {}".format(self.manager_args.pd_ratio,
-                        cur_num_prefill, cur_num_decode, scale_down_instance_id))
+                                                                           cur_num_prefill, cur_num_decode,
+                                                                           scale_down_instance_id))
 
         if cur_num_decode == 0 and cur_num_prefill > 0:
             scale_down_instance_id = random.choice(list(prefill_instance_ids))
             logger.info("[_inner_check_pd_deployment] pd_ratio: {}, cur_num_prefill: {}, cur_num_decode: {}, "
                         "all prefill, scale down prefill instance {}".format(self.manager_args.pd_ratio,
-                        cur_num_prefill, cur_num_decode, scale_down_instance_id))
+                                                                             cur_num_prefill, cur_num_decode,
+                                                                             scale_down_instance_id))
 
         if scale_down_instance_id:
             self.scale_down(scale_down_instance_id)
@@ -571,7 +621,7 @@ class Manager:
                 rescheduling_pg_states = list_placement_groups(filters=[("state", "=", "RESCHEDULING")])
                 all_penging_pg_names = [pg.name for pg in pending_pg_states]
 
-                if previous_penging_pg_names and len(rescheduling_pg_states) == 0 :
+                if previous_penging_pg_names and len(rescheduling_pg_states) == 0:
                     new_pending_pg_states = list_placement_groups(filters=[("state", "=", "PENDING")])
                     all_new_penging_pg_names = [pg.name for pg in new_pending_pg_states]
                     if len(set(previous_penging_pg_names).difference(set(all_new_penging_pg_names))) == 0:
@@ -593,7 +643,8 @@ class Manager:
             wait_pending_instance_time = 0.0
             while True:
                 instance_state = list_actors(filters=[("name", "=", get_instance_name(instance_id))])
-                instance_pending_creation = len(instance_state) == 1 and instance_state[0]["state"] == "PENDING_CREATION"
+                instance_pending_creation = len(instance_state) == 1 and instance_state[0][
+                    "state"] == "PENDING_CREATION"
                 if not instance_pending_creation:
                     break
                 await asyncio.sleep(WATCH_DEPLOYMENT_INTERVAL)
@@ -680,7 +731,9 @@ class Manager:
 
     def _init_instance_info_csv(self, manager_args: ManagerArgs) -> None:
         # pylint: disable=consider-using-with
-        self.instance_info_file = open(manager_args.log_filename + '_instance.csv', 'w', encoding='utf-8')
+        # self.instance_info_file = open(manager_args.log_filename + '_instance.csv', 'w', encoding='utf-8')
+        self.instance_info_file = open(os.path.join(manager_args.log_filename, 'instance_info.csv'), 'w',
+                                       encoding='utf-8')
         self.instance_info_csv = csv.writer(self.instance_info_file)
         self.instance_info_csv.writerow([
             'timestamp',
@@ -704,11 +757,17 @@ class Manager:
             'waiting_time_first_waiting_request'])
 
     def _log_instance_infos_to_csv(self, instance_infos: List[InstanceInfo]) -> None:
+        should_tensorboard = False  # Zhixin: update tensorboard only when instance info updated
+        instance_infos_updated: List[InstanceInfo] = []
+
         for instance_info in instance_infos:
             instance_id = instance_info.instance_id
             gpu_cache_usage = instance_info.gpu_cache_usage
-            should_log = (gpu_cache_usage > 0) or (gpu_cache_usage == 0 and not self.instance_last_logged_empty[instance_id])
+            should_log = (gpu_cache_usage > 0) or (
+                    gpu_cache_usage == 0 and not self.instance_last_logged_empty[instance_id])
             if should_log:
+                should_tensorboard = True  # Zhixin
+                instance_infos_updated.append(instance_info)  # Zhixin
                 self.instance_last_logged_empty[instance_id] = (gpu_cache_usage == 0)
                 self.instance_info_csv.writerow([
                     instance_info.timestamp,
@@ -731,3 +790,150 @@ class Manager:
                     instance_info.num_blocks_all_waiting_requests,
                     instance_info.waiting_time_first_waiting_request])
         self.instance_info_file.flush()
+
+        # Zhixin: tensorboard logger
+        _start = time.time()
+        if self.tensorboard_writer is not None and should_tensorboard:
+            # scheduler info *******************************************************************************************
+            # self.tensorboard_writer.add_scalar('scheduler/num_instances', self.num_instances, self.tensorboard_step)
+            # self.tensorboard_writer.add_scalar('scheduler/num_instances_prefill',
+            #                                    len([info for info in instance_infos if
+            #                                       info.instance_type == InstanceType.PREFILL]), self.tensorboard_step)
+            # self.tensorboard_writer.add_scalar('scheduler/num_instances_decode',
+            #                                    len([info for info in instance_infos if
+            #                                       info.instance_type == InstanceType.DECODE]), self.tensorboard_step)
+            self.tensorboard_writer.add_scalar('scheduler/gpu_cache_usage_avg',
+                                               np.average([info.gpu_cache_usage for info in instance_infos]),
+                                               self.tensorboard_step)
+            self.tensorboard_writer.add_scalar('scheduler/gpu_available_blocks_total',
+                                               sum([info.num_available_gpu_blocks for info in
+                                                    instance_infos]), self.tensorboard_step)
+            loads = {
+                'scheduler/load_dispatch_min': min([info.dispatch_load_metric for info in instance_infos]),
+                'scheduler/load_dispatch_max': max([info.dispatch_load_metric for info in instance_infos]),
+                'scheduler/load_migration_min': min([info.migration_load_metric for info in instance_infos]),
+                'scheduler/load_migration_max': max([info.migration_load_metric for info in instance_infos]),
+            }
+            # convert inf & -inf to 1e5 & -1e5, convert nan to 0
+            for key, value in loads.items():
+                if np.isinf(value):
+                    loads[key] = 1e5 if value > 0 else -1e5
+                elif np.isnan(value):
+                    loads[key] = 0
+                self.tensorboard_writer.add_scalar(key, loads[key], self.tensorboard_step)
+
+            self.tensorboard_writer.add_scalar('scheduler/requests_running_total',
+                                               sum([info.num_running_requests for info in instance_infos]),
+                                               self.tensorboard_step)
+            self.tensorboard_writer.add_scalar('scheduler/requests_waiting_total',
+                                               sum([info.num_waiting_requests for info in instance_infos]),
+                                               self.tensorboard_step)
+            self.tensorboard_writer.add_scalar('scheduler/requests_killed_total',
+                                               sum([info.num_killed_requests for info in instance_infos]),
+                                               self.tensorboard_step)
+
+            # logger.warning("[TENSORBOARD] scheduler/num_instances: {}".format(self.num_instances))
+            # logger.warning("[TENSORBOARD] scheduler/num_instances_prefill: {}".format(
+            #     len([info for info in instance_infos if info.instance_type == InstanceType.PREFILL])))
+            # logger.warning("[TENSORBOARD] scheduler/num_instances_decode: {}".format(
+            #     len([info for info in instance_infos if info.instance_type == InstanceType.DECODE])))
+            # logger.warning("[TENSORBOARD] scheduler/gpu_cache_usage_avg: {}".format(
+            #     np.average([info.gpu_cache_usage for info in instance_infos])))
+            # logger.warning("[TENSORBOARD] scheduler/gpu_available_blocks_total: {}".format(
+            #     sum([info.num_available_gpu_blocks for info in instance_infos])))
+            # logger.warning("[TENSORBOARD] scheduler/load_dispatch_avg: {}".format(
+            #     np.average([info.dispatch_load_metric for info in instance_infos])))
+            # logger.warning("[TENSORBOARD] scheduler/load_migration_avg: {}".format(
+            #     np.average([info.migration_load_metric for info in instance_infos])))
+            # logger.warning("[TENSORBOARD] scheduler/requests_running_total: {}".format(
+            #     sum([info.num_running_requests for info in instance_infos])))
+            # logger.warning("[TENSORBOARD] scheduler/requests_waiting_total: {}".format(
+            #     sum([info.num_waiting_requests for info in instance_infos])))
+            # logger.warning("[TENSORBOARD] scheduler/requests_killed_total: {}".format(
+            #     sum([info.num_killed_requests for info in instance_infos])))
+
+            # no logged infos:
+            # timestamp, step_id, inference_type, num_batched_tokens, profiling_data, running_seq_lens, num_seqs,
+            # num_blocks_first_waiting_request, num_blocks_all_waiting_requests, waiting_time_first_waiting_request
+            # NOTE: running_seq_lens->List  |  num_seqs=None by default
+
+            # instance info ********************************************************************************************
+            # TODO(Zhixin): timestamp and step of each instance haven't been used. Not precise currently.
+            self.tensorboard_writer.add_scalars('instance/gpu_cache_usage',
+                                                {info.instance_id_str: info.gpu_cache_usage for info in
+                                                 instance_infos_updated},
+                                                self.tensorboard_step)
+            self.tensorboard_writer.add_scalars('instance/gpu_available_blocks',
+                                                {info.instance_id_str: info.num_available_gpu_blocks for info in
+                                                 instance_infos_updated},
+                                                self.tensorboard_step)
+            load_dispatch = {info.instance_id_str: info.dispatch_load_metric for info in instance_infos_updated}
+            load_migration = {info.instance_id_str: info.migration_load_metric for info in instance_infos_updated}
+            # convert inf & -inf to 1e5 & -1e5, convert nan to 0
+            for key, value in load_dispatch.items():
+                if np.isinf(value):
+                    load_dispatch[key] = 1e5 if value > 0 else -1e5
+                elif np.isnan(value):
+                    load_dispatch[key] = 0
+            for key, value in load_migration.items():
+                if np.isinf(value):
+                    load_migration[key] = 1e5 if value > 0 else -1e5
+                elif np.isnan(value):
+                    load_migration[key] = 0
+            self.tensorboard_writer.add_scalars('instance/load_dispatch', load_dispatch, self.tensorboard_step)
+            self.tensorboard_writer.add_scalars('instance/load_migration', load_migration, self.tensorboard_step)
+            self.tensorboard_writer.add_scalars('instance/requests_running',
+                                                {info.instance_id_str: info.num_running_requests for info in
+                                                 instance_infos_updated},
+                                                self.tensorboard_step)
+            self.tensorboard_writer.add_scalars('instance/requests_waiting',
+                                                {info.instance_id_str: info.num_waiting_requests for info in
+                                                 instance_infos_updated},
+                                                self.tensorboard_step)
+            self.tensorboard_writer.add_scalars('instance/requests_killed',
+                                                {info.instance_id_str: info.num_killed_requests for info in
+                                                 instance_infos_updated},
+                                                self.tensorboard_step)
+            self.tensorboard_writer.add_scalars('instance/other/num_seqs',
+                                                {info.instance_id_str: len(info.running_seq_lens) for info in
+                                                 instance_infos_updated},
+                                                self.tensorboard_step)
+            self.tensorboard_writer.add_scalars('instance/other/num_blocks_first_waiting_request',
+                                                {info.instance_id_str: info.num_blocks_first_waiting_request for info in
+                                                 instance_infos_updated},
+                                                self.tensorboard_step)
+            self.tensorboard_writer.add_scalars('instance/other/num_blocks_all_waiting_requests',
+                                                {info.instance_id_str: info.num_blocks_all_waiting_requests for info in
+                                                 instance_infos_updated},
+                                                self.tensorboard_step)
+            self.tensorboard_writer.add_scalars('instance/other/waiting_time_first_waiting_request',
+                                                {info.instance_id_str: info.waiting_time_first_waiting_request for info
+                                                 in instance_infos_updated},
+                                                self.tensorboard_step)
+
+            # logger.warning("[TENSORBOARD] instance/gpu_cache_usage: {}".format(
+            #     {info.instance_id: 1 for info in instance_infos_updated}))
+            # logger.warning("[TENSORBOARD] instance/gpu_available_blocks: {}".format(
+            #     {info.instance_id: 1 for info in instance_infos_updated}))
+            # logger.warning("[TENSORBOARD] instance/load_dispatch: {}".format(
+            #     {info.instance_id: 1 for info in instance_infos_updated}))
+            # logger.warning("[TENSORBOARD] instance/load_migration: {}".format(
+            #     {info.instance_id: 1 for info in instance_infos_updated}))
+            # logger.warning("[TENSORBOARD] instance/requests_running: {}".format(
+            #     {info.instance_id: 1 for info in instance_infos_updated}))
+            # logger.warning("[TENSORBOARD] instance/requests_waiting: {}".format(
+            #     {info.instance_id: 1 for info in instance_infos_updated}))
+            # logger.warning("[TENSORBOARD] instance/requests_killed: {}".format(
+            #     {info.instance_id: 1 for info in instance_infos_updated}))
+            # logger.warning("[TENSORBOARD] instance/other/num_seqs: {}".format(
+            #     {info.instance_id: 1 for info in instance_infos_updated}))
+            # logger.warning("[TENSORBOARD] instance/other/num_blocks_first_waiting_request: {}".format(
+            #     {info.instance_id: 1 for info in instance_infos_updated}))
+            # logger.warning("[TENSORBOARD] instance/other/num_blocks_all_waiting_requests: {}".format(
+            #     {info.instance_id: 1 for info in instance_infos_updated}))
+            # logger.warning("[TENSORBOARD] instance/other/waiting_time_first_waiting_request: {}".format(
+            #     {info.instance_id: 1 for info in instance_infos_updated}))
+
+            self.tensorboard_writer.flush()
+            self.tensorboard_step += 1
+            logger.warning("$$$$$ time for tensorboard_writer: {:.2} ms".format(1000 * (time.time() - _start)))

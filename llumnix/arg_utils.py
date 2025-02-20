@@ -136,6 +136,10 @@ class ManagerArgs:
     disable_log_requests_manager: bool = None
     log_instance_info: bool = None
     log_filename: str = None
+
+    # Zhixin: add tensorboard support
+    log_tensorboard_dir: str = None
+
     enable_port_increment: bool = None
     enable_port_offset_store: bool = None
 
@@ -275,6 +279,9 @@ class ManagerArgs:
         parser.add_argument('--log-filename',
                             type=str,
                             help='log filename')
+        parser.add_argument('--log-tensorboard-dir',
+                            type=str,
+                            help='logdir for tensorboard (default=None, no tensorboard logging)')
         parser.add_argument('--enable-port-increment',
                             action='store_true',
                             help='enable port increment when desploying multiple servers')
@@ -353,7 +360,7 @@ class InstanceArgs:
 
     @classmethod
     def check_args(cls, args: 'InstanceArgs', manager_args: ManagerArgs,
-                   launch_model: LaunchMode, parser: argparse.ArgumentParser):
+                   launch_mode: LaunchMode, parser: argparse.ArgumentParser):
         # pylint: disable=protected-access
         for action in parser._optionals._actions:
             if hasattr(action, 'choices') and action.choices is not None and hasattr(args, action.dest):
@@ -363,7 +370,7 @@ class InstanceArgs:
             "Set profiling_result_file_path args when enable simulator mode"
 
         # instance_type check
-        if manager_args.enable_pd_disagg and launch_model == LaunchMode.LOCAL:
+        if manager_args.enable_pd_disagg and launch_mode == LaunchMode.LOCAL:
             assert args.instance_type in ['prefill', 'decode'], \
                 "instance_type should be prefill or decode if enable_pd_disagg is set."
 

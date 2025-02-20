@@ -169,7 +169,7 @@ class Launcher:
                 put_actor_data_to_ray_internal_kv("manager", "port_offset", self.port_offset)
         return next_entrypoints_args
 
-    def init_server_and_instance(self, instance_id: str, entrypoints_args: EntrypointsArgs,
+    def init_server_and_instance(self, instance_id: str, instance_id_str: str, entrypoints_args: EntrypointsArgs,
                                  instance_args: InstanceArgs, engine_args, backend_type: BackendType,
                                  placement_group: PlacementGroup, instance_finish_cb: Callable = None,
                                  server_finish_cb: Callable = None):
@@ -199,7 +199,7 @@ class Launcher:
 
         request_output_queue_type = QueueType(entrypoints_args.request_output_queue_type)
         next_instance_args = self._get_next_instance_args(instance_args)
-        instance = self.init_instance(instance_id, next_instance_args, placement_group,
+        instance = self.init_instance(instance_id, instance_id_str, next_instance_args, placement_group,
                                        request_output_queue_type, backend_type, engine_args)
         next_entrypoints_args = self._get_next_entrypoints_args(entrypoints_args)
         server = self.init_server(get_server_name(instance_id), placement_group, next_entrypoints_args)
@@ -215,6 +215,7 @@ class Launcher:
 
     def init_instance(self,
                        instance_id: str,
+                       instance_id_str: str,  # Zhixin: add instance_id_str for tensorboard
                        instance_args: InstanceArgs,
                        placement_group: PlacementGroup,
                        request_output_queue_type: QueueType,
@@ -223,6 +224,7 @@ class Launcher:
                       ) -> Tuple[str, Llumlet]:
         instance = Llumlet.from_args(
                         instance_id,
+                        instance_id_str, # Zhixin: add instance_id_str for tensorboard
                         instance_args,
                         placement_group,
                         request_output_queue_type,

@@ -51,7 +51,8 @@ def launch_ray_cluster(port: int) -> subprocess.CompletedProcess:
         sys.exit(1)
     ray_start_command = None
     if 'HEAD_NODE' in os.environ:
-        ray_start_command = f"ray start --head --node-ip-address={node_ip_address} --port={port}" \
+        logger.warning("[ZHIXIN] Launch ray cluster on head node.")
+        ray_start_command = f"ray start --head --node-ip-address={node_ip_address} --port={port} " \
                             f"--dashboard-host='0.0.0.0' --dashboard-port=7000"  # @Zhixin: launch dashboard
         try:
             result = subprocess.run(['ray', 'start', '--head', f'--port={port}',

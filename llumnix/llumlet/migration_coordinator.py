@@ -14,7 +14,7 @@
 import time
 import traceback
 import enum
-from typing import List
+from typing import List, Tuple
 
 # pylint: disable=unused-import
 import ray
@@ -50,9 +50,10 @@ class MigrationCoordinator:
         self.migration_max_stages = migration_max_stages
         self.backend_engine = backend_engine
 
+    # Yongfeng: modified for migration counter
     async def migrate_out_running_request(self,
                                           migrate_in_ray_actor: "ray.actor.ActorHandle",
-                                          migrate_out_request: LlumnixRequest) -> "MigrationStatus":
+                                          migrate_out_request: LlumnixRequest) -> Tuple["MigrationStatus", int]:
         try:
             return await self._migrate_out_multistage(migrate_in_ray_actor, migrate_out_request)
         except Exception as e:
@@ -60,15 +61,16 @@ class MigrationCoordinator:
             logger.error("Exception traceback: {}".format(traceback.format_exc()))
             raise
 
+    # Yongfeng: modified for migration counter
     async def migrate_out_waiting_request(self,
                                           migrate_in_ray_actor: "ray.actor.ActorHandle",
-                                          migrate_out_request: LlumnixRequest) -> "MigrationStatus":
+                                          migrate_out_request: LlumnixRequest) -> Tuple["MigrationStatus", int]:
         """one-stage migration for a waiting request
         """
         try:
             found = self.backend_engine.remove_waiting_request(migrate_out_request.request_id)
             if not found:
-                return MigrationStatus.ABORTED_SRC
+                return MigrationStatus.ABORTED_SRC, 0
             self.backend_engine.add_migrating_out_request_last_stage(migrate_out_request)
             dst_blocks = await migrate_in_ray_actor.execute_migration_method \
                                     .remote("migrate_in_pre_alloc", migrate_out_request.request_id,
@@ -79,44 +81,48 @@ class MigrationCoordinator:
             if len(dst_blocks) != migrate_out_request.prefill_num_blocks:
                 self.backend_engine.add_waiting_request(migrate_out_request)
                 self.backend_engine.remove_migrating_out_request_last_stage(migrate_out_request)
-                return MigrationStatus.ABORTED_DST
+                return MigrationStatus.ABORTED_DST, 0
 
-            return MigrationStatus.FINISHED
+            return MigrationStatus.FINISHED, len(dst_blocks)
         except Exception as e:
             logger.error("Unexpected exception: {}".format(e))
             logger.error("Exception traceback: {}".format(traceback.format_exc()))
             raise
 
+    # Yongfeng: modified for migration counter
     async def _migrate_out_multistage(self,
                                       migrate_in_ray_actor: "ray.actor.ActorHandle",
-                                      migrate_out_request: LlumnixRequest) -> "MigrationStatus":
+                                      migrate_out_request: LlumnixRequest) -> Tuple["MigrationStatus", int]:
         """Migrate out requests to a specified instance, return migrated request id.
         Args:
             migrate_in_ray_actor: instance actor name, used to get ray actor handle.
             migrate_out_request: request to migrate out.
         """
+        migrated_blocks = 0
         try:
             stage_count = 0
             while stage_count < self.migration_max_stages:
                 stage_count += 1
-                status = await self._migrate_out_onestage(migrate_in_ray_actor, migrate_out_request)
+                status, blocks = await self._migrate_out_onestage(migrate_in_ray_actor, migrate_out_request)
+                migrated_blocks += blocks
                 if MigrationStatus.is_finished(status):
-                    return status
+                    return status, migrated_blocks
             # exceed max stages
-            return MigrationStatus.ABORTED_SRC
+            return MigrationStatus.ABORTED_SRC, migrated_blocks
         except Exception as e:
             logger.error("Unexpected exception: {}".format(e))
             logger.error("Exception traceback: {}".format(traceback.format_exc()))
             raise
 
+    # Yongfeng: modified for migration counter
     async def _migrate_out_onestage(self,
                                     migrate_in_ray_actor: "ray.actor.ActorHandle",
-                                    migrate_out_request: LlumnixRequest) -> "MigrationStatus":
+                                    migrate_out_request: LlumnixRequest) -> Tuple["MigrationStatus", int]:
         """one-stage live migration until last stage for a running request
         """
         try:
             if migrate_out_request.should_abort_migration():
-                return MigrationStatus.ABORTED_SRC
+                return MigrationStatus.ABORTED_SRC, 0
 
             pre_stage_num_blocks = sum(migrate_out_request.stage_num_blocks_list)
             incremental_blocks, incremental_token_ids = self.backend_engine.get_request_incremental_blocks(migrate_out_request, pre_stage_num_blocks)
@@ -138,7 +144,7 @@ class MigrationCoordinator:
                 migration_status = MigrationStatus.FINISHED
                 found = self.backend_engine.remove_running_request(migrate_out_request.request_id)
                 if not found:
-                    return MigrationStatus.ABORTED_SRC
+                    return MigrationStatus.ABORTED_SRC, 0
                 self.backend_engine.add_migrating_out_request_last_stage(migrate_out_request)
                 src_blocks = incremental_blocks[:]
                 stage_block_num = len(incremental_blocks)
@@ -154,10 +160,10 @@ class MigrationCoordinator:
                 if is_last_stage:
                     self.backend_engine.add_running_request(migrate_out_request)
                     self.backend_engine.remove_migrating_out_request_last_stage(migrate_out_request)
-                return MigrationStatus.ABORTED_DST
+                return MigrationStatus.ABORTED_DST, 0
 
             if migrate_out_request.should_abort_migration():
-                return MigrationStatus.ABORTED_SRC
+                return MigrationStatus.ABORTED_SRC, 0
 
             # do stage send/recv
             migrate_out_request.stage_timestamps.append(time.time())
@@ -167,9 +173,9 @@ class MigrationCoordinator:
 
             if not is_last_stage and migrate_out_request.should_abort_migration():
                 # migrate-out request abort by scheduler during send/recv
-                return MigrationStatus.ABORTED_SRC
+                return MigrationStatus.ABORTED_SRC, 0
 
-            return migration_status
+            return migration_status, len(dst_blocks)
         except Exception as e:
             logger.error("Unexpected exception: {}".format(e))
             logger.error("Exception traceback: {}".format(traceback.format_exc()))

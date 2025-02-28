@@ -13,7 +13,7 @@
 
 import asyncio
 import traceback
-from typing import List, Union, Iterable
+from typing import List, Union, Iterable, Tuple
 import time
 
 import ray
@@ -144,39 +144,44 @@ class Llumlet:
                 self_actor = ray.get_actor(name=self.actor_name, namespace="llumnix")
                 ray.kill(self_actor)
 
-    async def migrate_out(self, dst_instance_name: str) -> List[str]:
+    # Yongfeng: modified for migration counter
+    async def migrate_out(self, dst_instance_name: str) -> Tuple[List[str], int]:
         migrate_out_requests = self.migration_scheduler.get_migrate_out_requests()
 
         if len(migrate_out_requests) == 0:
-            return []
+            return [], 0
 
         for migrate_out_request in migrate_out_requests:
             migrate_out_request.is_migrating = True
 
-        migrated_request_list = []
+        migrated_request_list, migrated_blocks = [], 0
         for migrate_out_request in migrate_out_requests:
-            migrated_request = await self._migrate_out_one_request(migrate_out_request, dst_instance_name)
+            migrated_request, blocks = await self._migrate_out_one_request(migrate_out_request, dst_instance_name)
             migrated_request_list.extend(migrated_request)
+            migrated_blocks += blocks
             if len(migrated_request) == 0 and migrate_out_request.eom:
                 break
-        return migrated_request_list
+        return migrated_request_list, migrated_blocks
 
+    # Yongfeng: modified for migration counter
     async def _migrate_out_one_request(self, migrate_out_request: LlumnixRequest, dst_instance_name: str) -> List[LlumnixRequest]:
         try:
             t0 = time.time()
             migrate_in_ray_actor = ray.get_actor(dst_instance_name, namespace='llumnix')
             dst_instance_id = dst_instance_name[len("instance_"):]
             logger.info("{}->{} begin migrate out".format(self.instance_id, dst_instance_id))
-            migrated_request = []
+            migrated_request, migrated_blocks = [], 0
 
             if migrate_out_request.status == RequestStatus.RUNNING:
                 migrate_out_request.migration_start_time = time.time()
-                status = await self.migration_coordinator.migrate_out_running_request(migrate_in_ray_actor, migrate_out_request)
+                status, migrated_blocks = await \
+                    self.migration_coordinator.migrate_out_running_request(migrate_in_ray_actor, migrate_out_request)
             elif migrate_out_request.status == RequestStatus.WAITING:
                 migrate_out_request.migration_start_time = time.time()
-                status = await self.migration_coordinator.migrate_out_waiting_request(migrate_in_ray_actor, migrate_out_request)
+                status, migrated_blocks = await \
+                    self.migration_coordinator.migrate_out_waiting_request(migrate_in_ray_actor, migrate_out_request)
             else:
-                return migrated_request
+                return migrated_request, 0
 
             if status == MigrationStatus.FINISHED:
                 await migrate_in_ray_actor.execute_engine_method.remote("commit_dst_request", migrate_out_request)
@@ -201,7 +206,7 @@ class Llumlet:
             logger.error("Unexpected exception: {}".format(e))
             logger.error("Exception traceback: {}".format(traceback.format_exc()))
             raise
-        return migrated_request
+        return migrated_request, migrated_blocks
 
     # TODO(KuilongCui): only the metrics-related information needs to be synchronously loaded for the manager
     def get_instance_info(self) -> InstanceInfo:

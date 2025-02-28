@@ -23,6 +23,7 @@ from functools import partial
 
 import numpy as np
 import tensorboardX
+from tensorboardX import SummaryWriter
 
 import ray
 import ray.actor
@@ -153,11 +154,19 @@ class Manager:
         self.scaling_down = False
         self.last_check_scale_time = time.time()
 
+        # Yongfeng: migration counter
+        self.migration_request_num = 0
+        self.migration_blocks_num = 0
+
         # tasks
         # When manager starts, it automatically connects to all existing instances.
         run_async_func_sync(self._connect_to_instances())
         asyncio.create_task(self._update_instance_info_loop(self.polling_interval))
         asyncio.create_task(self._clear_request_instance_loop(CLEAR_REQUEST_INSTANCE_INTERVAL))
+
+        # Yongfeng: migration counter
+        if self.enable_migration:
+            asyncio.create_task(self._update_migration_info_loop(1))  # TODO(Zhixin): add parameter for migration counter
 
         if hasattr(self, "launch_mode") and self.launch_mode == LaunchMode.GLOBAL:
             assert self.entrypoints_args is not None and self.engine_args is not None
@@ -167,7 +176,7 @@ class Manager:
             if self.manager_args.enable_pd_disagg:
                 asyncio.create_task(self._check_pd_deployment_states_loop(CHECK_DEPLOYMENT_STATES_INTERVAL))
 
-    async def generate(self, request_id: str, server_info: ServerInfo, *args, **kwargs, ) -> None:
+    async def generate(self, request_id: str, server_info: ServerInfo, *args, **kwargs,) -> None:
         while self.num_instances == 0:
             logger.warning("No instance available now, sleep {}s, "
                            "and regenerate request {}.".format(NO_INSTANCE_RETRY_INTERVAL, request_id))
@@ -252,6 +261,20 @@ class Manager:
                 logger.error("Unexpected exception: {}".format(e))
                 logger.error("Exception traceback: {}".format(traceback.format_exc()))
 
+    # Yongfeng: record migration info
+    async def _update_migration_info_loop(self, interval: float) -> None:
+        while True:
+            try:
+                await asyncio.sleep(interval)
+                if self.enable_migration and self.tensorboard_writer:
+                    self.tensorboard_writer.add_scalar('scheduler/migration/blocks_cnt',
+                                                       self.migration_blocks_num, self.tensorboard_step)
+                    self.tensorboard_writer.add_scalar('scheduler/migration/request_cnt',
+                                                       self.migration_request_num, self.tensorboard_step)
+            except Exception as e:
+                logger.error("Unexpected exception: {}".format(e))
+                logger.error("Exception traceback: {}".format(traceback.format_exc()))
+
     async def _push_migrations(self) -> None:
         if self.enable_pd_disagg:
             asyncio.create_task(self._migrate(PairMigrationConstraints.PREFILL_2_DECODING))
@@ -283,7 +306,9 @@ class Manager:
                         logger.info("Instance {} is dead.".format(instance_id))
                         self.scale_down(instance_id)
             else:
-                migrate_out_request_ids = ret[0]
+                # Yongfeng: modified for migration counter
+                migrate_item = ret[0]
+                migrate_out_request_ids = migrate_item[0]
                 if migrate_out_request_ids:
                     migrate_out_request_id = migrate_out_request_ids[0]
                     self.request_instance[migrate_out_request_id] = migrate_instance_pair[1]
@@ -291,6 +316,10 @@ class Manager:
                     # Zhixin: increase indent to avoid empty migration message
                     logger.info("instance {}->{} migrate done, migrate request {}".format(
                         migrate_instance_pair[0], migrate_instance_pair[1], migrate_out_request_ids))
+                # Yongfeng: count all type of migration
+                # if pair_migration_type == PairMigrationConstraints.DECODING_2_DECODING:
+                self.migration_request_num += len(migrate_out_request_ids)
+                self.migration_blocks_num += migrate_item[1]
 
         def migrate_done_callback_wrapper(migrate_instance_pair: Tuple[str, str], fut) -> None:
             ret = fut.result()

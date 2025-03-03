@@ -11,5 +11,5 @@ HEAD_NODE=1 python -m llumnix.entrypoints.vllm.serve \
                 --config-file $CONFIG_PATH \
                 --model $MODEL_PATH \
                 --worker-use-ray \
-                --max-model-len 4096 \
+                --max-model-len 32768 \
                 --gpu-memory-utilization 0.95

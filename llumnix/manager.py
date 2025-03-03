@@ -96,9 +96,9 @@ class TensorWriter(Process):
             dinfos = [info for info in infos if info.instance_type == InstanceType.DECODE]
 
             # INFO: instance info
-            self.writer.add_scalar('scheduler/num_instances', len(infos), self.step)
-            self.writer.add_scalar('scheduler/num_instances_prefill', len(pinfos), self.step)
-            self.writer.add_scalar('scheduler/num_instances_decode', len(dinfos), self.step)
+            self.writer.add_scalar('scheduler.instance/num_instances', len(infos), self.step)
+            self.writer.add_scalar('scheduler.instance/num_instances_prefill', len(pinfos), self.step)
+            self.writer.add_scalar('scheduler.instance/num_instances_decode', len(dinfos), self.step)
 
             # INFO: gpu mem info
             if len(pinfos):
@@ -132,15 +132,8 @@ class TensorWriter(Process):
             # 'scheduler.load/load_dispatch_max': max([info.dispatch_load_metric for info in infos]),
             # 'scheduler.load/load_migration_min': min([info.migration_load_metric for info in infos]),
             # 'scheduler.load/load_migration_max': max([info.migration_load_metric for info in infos]),
-            # convert inf & -inf to 1e5 & -1e5, convert nan to 0
             for key, value in loads.items():
-                if np.isinf(value):
-                    logger.error(f"inf value: {key}, {value}")
-                    loads[key] = 1e5 if value > 0 else -1e5
-                elif np.isnan(value):
-                    logger.error(f"nan value: {key}, {value}")
-                    loads[key] = 0
-                self.writer.add_scalar(key, loads[key], self.step)
+                self.writer.add_scalar(key, value, self.step)
 
             # INFO: request & compute info
             if len(pinfos):
@@ -176,21 +169,6 @@ class TensorWriter(Process):
             # INFO: load info
             load_dispatch = {info.instance_id_str: info.dispatch_load_metric for info in infos}
             load_migration = {info.instance_id_str: info.migration_load_metric for info in infos}
-            # convert inf & -inf to 1e5 & -1e5, convert nan to 0
-            for key, value in load_dispatch.items():
-                if np.isinf(value):
-                    logger.error(f"inf value: {key}, {value}")
-                    load_dispatch[key] = 1e5 if value > 0 else -1e5
-                elif np.isnan(value):
-                    logger.error(f"nan value: {key}, {value}")
-                    load_dispatch[key] = 0
-            for key, value in load_migration.items():
-                if np.isinf(value):
-                    logger.error(f"inf value: {key}, {value}")
-                    load_migration[key] = 1e5 if value > 0 else -1e5
-                elif np.isnan(value):
-                    logger.error(f"nan value: {key}, {value}")
-                    load_migration[key] = 0
             self.writer.add_scalars('instance.load/load', load_dispatch, self.step)
             self.writer.add_scalars('instance.load/migration', load_migration, self.step)
 

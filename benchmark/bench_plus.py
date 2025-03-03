@@ -34,6 +34,8 @@ from enum import Enum
 from transformers import AutoTokenizer
 from typing import List
 
+random.seed(0xCADE)
+np.random.seed(0xCADE)
 multiprocessing.set_start_method('spawn', True)  # avoid tokenizer warning
 
 num_finished_requests = 0
@@ -165,14 +167,14 @@ def calculate_throughput(queries,
             cf_gen_lens.append(response['num_output_tokens_cf'])
         if 'response_len' in response:
             expected_response_lens.append(response['response_len'])
-    # prompt_ids = [p for p in tokenizer.batch_encode_plus(prompts)['input_ids']]
-    # response_ids = [r for r in tokenizer.batch_encode_plus(responses)['input_ids']]
 
+    prompt_ids = list(p for p in tokenizer.batch_encode_plus(prompts)['input_ids'])
+    response_ids = list(r for r in tokenizer.batch_encode_plus(responses)['input_ids'])
     # print(f'check_len actual {list(sorted(len(response) for response in response_ids))}')
     # print(f'check_len expect {list(sorted(expected_response_lens))}')
     # print(f'self-reported {list(sorted(cf_gen_lens))}')
-    # for prompt, response, expected_response_len in zip(prompt_ids, response_ids, expected_response_lens):
-    #     print(f'check lens {len(prompt)=} {len(response)=} {expected_response_len=}')
+    for prompt, response, expected_response_len in zip(prompt_ids, response_ids, expected_response_lens):
+        print(f'check lens {len(prompt)=} {len(response)=} {expected_response_len=}')
 
     try:
         prompt_lens = get_tok_id_lens(tokenizer, prompts)
@@ -221,7 +223,8 @@ def calculate_throughput(queries,
     print(msg)
 
     if fail_on_response_failure:
-        assert len(responses) == len(queries), f"{fail_on_response_failure=}, expected number of successful respones to equal number of queries, got {len(responses)} vs {len(queries)} "
+        assert len(responses) == len(
+            queries), f"{fail_on_response_failure=}, expected number of successful respones to equal number of queries, got {len(responses)} vs {len(queries)} "
 
     return throughput_tok_s, throughput_prefill, throughput_decode
 
@@ -467,7 +470,7 @@ async def benchmark(
         backend: GenerationBackend,
         tokenizer,
         prompts: List[str],
-        allow_variable_generation_length: bool,
+        allow_random_gen_len: bool,
         verbose: bool,
         log_dir: str,
         ip_ports: List[int],
@@ -497,7 +500,8 @@ async def benchmark(
         print(f'[WARNING] coefficient_variation is only supported for gamma distribution. Setting it to 0.0.')
         coefficient_variation = 0.0
 
-    print(f'Starting with backend={backend}, num_prompts={len(prompts)}, allow_variable_gen_length={allow_variable_generation_length}')
+    print(
+        f'Starting with backend={backend}, num_prompts={len(prompts)}, allow_random_gen_length={allow_random_gen_len}')
     print(f'traffic distribution={distribution}, qps={qps}, coefficient_variation={coefficient_variation}')
 
     async_prompts = async_request_gen(
@@ -547,7 +551,7 @@ async def benchmark(
            m._per_token_latencies_breakdown_dict
 
 
-def gen_random_response_lens(distribution: str, len_mean, len_range, num_prompts):
+def gen_random_lens(distribution: str, len_mean, len_range, num_prompts):
     if distribution == 'uniform':
         if len_range == 0:
             return [len_mean for _ in range(num_prompts)]
@@ -603,27 +607,16 @@ def gen_random_response_lens(distribution: str, len_mean, len_range, num_prompts
     return response_lens
 
 
-def gen_random_prompts(tokenizer, len_mean, len_range, num_prompts, vocab_ids_to_exclude=[]):
-    prompts, _ = gen_random_prompts_return_lens(
-        tokenizer, len_mean, len_range, num_prompts, vocab_ids_to_exclude)
-    return prompts
-
-
 def gen_random_prompts_return_lens(tokenizer, distribution: str, len_mean, len_range, num_prompts,
                                    vocab_ids_to_exclude=[]):
     def gen_prompt_ids(length):
         return [random.randint(10, tokenizer.vocab_size) for _ in range(length)]
 
-    # prompt_lens = list(
-    #     map(lambda _: random.randint(low, high), range(num_prompts)))
-    prompt_lens = gen_random_response_lens(distribution, len_mean, len_range, num_prompts)
-    prompts_as_ids = list(
-        map(lambda prompt_len: gen_prompt_ids(prompt_len), prompt_lens))
-    prompts = list(
-        map(lambda prompt_ids: tokenizer.decode(prompt_ids), prompts_as_ids))
+    prompt_lens = gen_random_lens(distribution, len_mean, len_range, num_prompts)
+    prompts_as_ids = list(map(lambda prompt_len: gen_prompt_ids(prompt_len), prompt_lens))
+    prompts = list(map(lambda prompt_ids: tokenizer.decode(prompt_ids), prompts_as_ids))
 
-    # Because tokens do not map 1:1 to words, sometimes we get more tokens than desired.
-    # This removes the additional tokens by tokenizing the prompt and cutting off additional tokens.
+    # Removes the additional tokens by tokenizing the prompt and cutting off additional tokens.
     # Confusingly, it works with a single iteration per prompt.
     for i, (p, l) in enumerate(zip(prompts, prompt_lens)):
         encoded = tokenizer(p)['input_ids']
@@ -631,20 +624,12 @@ def gen_random_prompts_return_lens(tokenizer, distribution: str, len_mean, len_r
             # I am not sure why l-1 works, but it does..
             encoded = encoded[:l - 1]
         decoded = tokenizer.decode(encoded)
-        encoded = tokenizer(decoded)['input_ids']
-        # assert len(
-        #     encoded) == l, f"Expected prompt to contain exactly {l} tokens, got {len(encoded)=}"
         prompts[i] = decoded
 
     return prompts, prompt_lens
 
 
-def sample_sharegpt_requests(
-        dataset_path: str,
-        num_requests: int,
-        tokenizer,
-        max_seqlen: int,
-):
+def sample_sharegpt_requests(dataset_path: str, num_requests: int, tokenizer, max_seqlen: int):
     # Load the dataset.
     prompts = []
     prompt_lens = []
@@ -672,12 +657,7 @@ def sample_sharegpt_requests(
     return sampled_prompts, sampled_prompt_lens, sampled_response_lens
 
 
-def sample_burstgpt_request(
-        dataset_path: str,
-        num_requests: int,
-        tokenizer,
-        max_seqlen: int,
-):
+def sample_burstgpt_request(dataset_path: str, num_requests: int, tokenizer, max_seqlen: int):
     data = pd.read_csv(dataset_path)
     request_tokens = data['Request tokens'].tolist()
     response_tokens = data['Response tokens'].tolist()
@@ -696,12 +676,7 @@ def sample_burstgpt_request(
     return prompts, prompt_lens, response_lens
 
 
-def sample_arxiv_request(
-        dataset_path: str,
-        num_requests: int,
-        tokenizer,
-        max_seqlen: int,
-):
+def sample_arxiv_request(dataset_path: str, num_requests: int, tokenizer, max_seqlen: int):
     prompts = []
     prompt_lens = []
     response_lens = []
@@ -739,7 +714,8 @@ def gpu_utilization_monitor(log_dir, devices: str, running_event: threading.Even
     steps = 0
     while running_event.is_set():
         gpu_util = get_gpu_util()
-        writer.add_scalars('scheduler.req/gpu_util', {f'gpu_{gid}': util for gid, util in zip(gpu_ids, gpu_util)}, steps)
+        writer.add_scalars('scheduler.req/gpu_util', {f'gpu_{gid}': util for gid, util in zip(gpu_ids, gpu_util)},
+                           steps)
         steps += 1
         time.sleep(interval_sec)
     writer.close()
@@ -747,74 +723,69 @@ def gpu_utilization_monitor(log_dir, devices: str, running_event: threading.Even
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--tokenizer", type=str, required=True,
-                        help="Name or path of the tokenizer.")
-    parser.add_argument('--trust_remote_code',
-                        action='store_true')
+    # global config
+    parser.add_argument("--tokenizer", type=str, required=True, help="Name or path of the tokenizer.")
+    parser.add_argument('--trust_remote_code', action='store_true')
     parser.add_argument('-v', '--verbose', action='store_true')
-    parser.add_argument('--backend', type=GenerationBackend,
-                        choices=[e.name for e in GenerationBackend], default='vLLM')
+    parser.add_argument('--backend', type=GenerationBackend, choices=[e.name for e in GenerationBackend],
+                        default='vLLM')
     parser.add_argument('--log_dir', type=str, default='./results/default')
     parser.add_argument('--ip_ports', nargs='+', required=True, help='List of ip:port')
-    parser.add_argument('--random_prompt_lens_mean', type=int)
-    parser.add_argument('--random_prompt_lens_range', type=int)
-    parser.add_argument('--variable_prompt_lens_distribution', choices=[
-        "uniform", "exponential", "capped_exponential", "zipf"], default="uniform")
+
+    # input config
     parser.add_argument('--random_prompt_count', type=int)
     parser.add_argument('--max_request_len', type=int, default=8192)
 
-    parser.add_argument(
-        '--distribution', choices=["burst", "uniform", "poisson", "gamma"], default="poisson",
-        help="burst: qps=inf, uniform: fixed qps, poisson & gamma: variable qps (only gamma support CV)")
+    # input config: random prompt
+    parser.add_argument('--gen_random_prompts', action='store_true')
+    parser.add_argument('--random_prompt_lens_mean', type=int)
+    parser.add_argument('--random_prompt_lens_range', type=int)
+    parser.add_argument('--random_prompt_lens_distribution', choices=[
+        "uniform", "exponential", "capped_exponential", "zipf"], default="uniform")
+
+    # input config: dataset prompt
+    parser.add_argument('--dataset_type', type=str, choices=['sharegpt', 'burstgpt', 'arxiv'])
+    parser.add_argument('--dataset_path', type=str)
+
+    # output config
+    parser.add_argument('--allow_random_gen_len', action='store_true')
+    parser.add_argument('--random_response_lens_mean', type=int)
+    parser.add_argument('--random_response_lens_range', type=int)
+    parser.add_argument('--random_response_lens_distribution', choices=[
+        "uniform", "exponential", "capped_exponential", "zipf"], default="uniform")
+
+    # workload config: distribution, qps, cv
+    parser.add_argument('--distribution', choices=["burst", "uniform", "poisson", "gamma"], default="poisson",
+                        help="burst: qps=inf, uniform: fixed qps, poisson & gamma: ... (only gamma support CV)")
     parser.add_argument('--qps', type=float, default=4.0)
     parser.add_argument('--coefficient_variation', type=float, default=0.0,
-                        help="Coefficient of variation for the gamma distribution. "
-                             "(0<CV<1.0 for steady workload, =1.0 for poisson distribution, >1.0 for bursty workload)")
+                        help="CV for the gamma distribution. (0<CV<1.0: steady, =1.0: poisson, >1.0: bursty)")
+
+    # other config
+    parser.add_argument('--print_generation_lens_and_exit', action='store_true')
     parser.add_argument('--log_latencies', action="store_true",
                         help="Whether or not to write all latencies to the log file.")
     parser.add_argument('--fail_on_response_failure', action="store_true",
                         help="Whether or not to fail the benchmarking script if any request fails")
-
-    parser.add_argument('--variable_response_lens_mean', type=int)
-    parser.add_argument('--variable_response_lens_range', type=int)
-    parser.add_argument('--variable_response_lens_distribution', choices=[
-        "uniform", "exponential", "capped_exponential", "zipf"], default="uniform")
-
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument('--dataset_type', type=str, choices=['sharegpt', 'burstgpt', 'arxiv'])
-    group.add_argument('--gen_random_prompts', action='store_true')
-
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument('--allow_variable_generation_length',
-                       action='store_true')
-    group.add_argument('--dataset_path', type=str)
-
-    parser.add_argument('--print_generation_lens_and_exit',
-                        action='store_true')
-
     # parser.add_argument('--enable_migration', type=int, default=0)
     # parser.add_argument('--priority_ratio', type=float, default=0.0)
-
     args = parser.parse_args()
 
     # save all configs into tensorboard log
+    os.makedirs(args.log_dir, exist_ok=True)
     writer = tensorboardX.SummaryWriter(args.log_dir, filename_suffix='.client')
     writer.add_text('config/client', str(args))
-    writer.flush()
-    # writer.close()  # do not close writer, keep it open for logging
+    writer.flush()  # do not close writer, keep it open for logging
 
-    if args.gen_random_prompts:
-        assert args.random_prompt_count is not None
-
+    # global config
     backend = GenerationBackend[args.backend]
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, trust_remote_code=args.trust_remote_code)
     print(tokenizer)
 
-    os.makedirs(args.log_dir, exist_ok=True)
-
+    # input preparation
+    if args.gen_random_prompts:
+        assert args.random_prompt_count is not None
     if args.dataset_type:
-        random.seed(0xCADE)
-        np.random.seed(0xCADE)
         if args.dataset_type == "sharegpt":
             prompts, prompt_lens, response_lens = sample_sharegpt_requests(args.dataset_path, args.random_prompt_count,
                                                                            tokenizer, args.max_request_len)
@@ -826,26 +797,25 @@ def main():
                                                                        tokenizer, args.max_request_len)
         num_prompts = len(prompts)
     elif args.gen_random_prompts:
+        # TODO(Zhixin): This step may be very slow, consider save the prompts to files in advance.
         num_prompts = args.random_prompt_count
-        random.seed(0xCADE)
-        np.random.seed(0xCADE)
         prompts, prompt_lens = gen_random_prompts_return_lens(
             tokenizer,
-            distribution=args.variable_prompt_lens_distribution,
+            distribution=args.random_prompt_lens_distribution,
             len_mean=args.random_prompt_lens_mean,
             len_range=args.random_prompt_lens_range,
             num_prompts=num_prompts,
-            vocab_ids_to_exclude=tokenizer.all_special_ids,
-        )
+            vocab_ids_to_exclude=tokenizer.all_special_ids)
     else:
         raise ValueError("unknown prompts")
 
-    if args.allow_variable_generation_length:
-        response_lens = gen_random_response_lens(
-            args.variable_response_lens_distribution, args.variable_response_lens_mean,
-            args.variable_response_lens_range, num_prompts=num_prompts)
-        args.fixed_max_tokens = -1
+    # output preparation
+    if args.allow_random_gen_len:
+        response_lens = gen_random_lens(
+            args.random_response_lens_distribution, args.random_response_lens_mean,
+            args.random_response_lens_range, num_prompts=num_prompts)
 
+    # truncate long prompt+gen_len
     for i, (prompt_len, gen_len) in enumerate(zip(prompt_lens, response_lens)):
         total = prompt_len + gen_len
         if total > args.max_request_len:
@@ -853,6 +823,7 @@ def main():
             gen_len = args.max_request_len - prompt_len
         response_lens[i] = gen_len
 
+    # log prompt and response lens
     if args.print_generation_lens_and_exit:
         print(f'{prompt_lens=}')
         print(f'{response_lens=}')
@@ -867,8 +838,8 @@ def main():
             total_tokens.append(prompt_len + gen_len)
         print('total tokens', sorted(list(total_tokens)))
 
+    # prepare and show prompt/response
     plot_len_cdf(prompt_lens, response_lens, total_tokens, args.log_dir)
-
     prompts = list(zip(prompts, prompt_lens, response_lens))
 
     # gpu utilization monitor, use subprocess to avoid tokenizer deadlocks
@@ -879,6 +850,7 @@ def main():
     monitor = multiprocessing.Process(target=gpu_utilization_monitor, args=(args.log_dir, devices, running_event))
     monitor.start()
 
+    # run benchmark
     throughput, \
     prefill_token_latencies, \
     decode_token_latencies, \
@@ -893,7 +865,7 @@ def main():
         backend,
         tokenizer,
         prompts,
-        args.allow_variable_generation_length,
+        args.allow_random_gen_len,
         args.verbose,
         args.log_dir,
         args.ip_ports,
@@ -904,9 +876,11 @@ def main():
         args.fail_on_response_failure,
     ))
 
+    # stop gpu utilization monitor
     running_event.clear()
     monitor.join()
 
+    # save latency info to json
     results = []
     file_name = os.path.join(args.log_dir, "latency_info.json")
     try:
@@ -917,6 +891,7 @@ def main():
     except FileNotFoundError:
         os.mknod(file_name)
 
+    # save latency info to json
     with open(file_name, 'w', encoding='utf-8') as f:
         data = {"qps": args.qps,
                 "cv": args.coefficient_variation,
@@ -957,6 +932,7 @@ def main():
             np.percentile(latencies, 99.9),
             np.mean(latencies),
         )
+
     workload = {
         'qps': args.qps,
         'cv': args.coefficient_variation,

@@ -109,8 +109,11 @@ class DispatchLoadComputation(LoadComputationStrategy):
             num_requests = instance_info.num_running_requests + instance_info.num_waiting_requests
             num_available_gpu_blocks = instance_info.num_available_gpu_blocks - instance_info.num_blocks_all_waiting_requests
             if num_requests == 0:
-                return -np.inf
+                # return -np.inf
+                return num_available_gpu_blocks * -2  # ZhiXin: change to return the number of available blocks
             instance_load = (num_available_gpu_blocks / num_requests) * (-1)
+        else:
+            logger.error(f"Invalid dispatch load metric: {self.load_metric}")
         return instance_load
 
 
@@ -144,8 +147,11 @@ class MigrationLoadComputation(LoadComputationStrategy):
                 num_available_gpu_blocks = instance_info.num_available_gpu_blocks - \
                                            instance_info.num_blocks_first_waiting_request
             if num_requests == 0:
-                return -np.inf
+                # return -np.inf
+                return num_available_gpu_blocks * -2  # ZhiXin: change to return the number of available blocks
             instance_load = (num_available_gpu_blocks / num_requests) * (-1)
+        else:
+            logger.error(f"Invalid migration load metric: {self.load_metric}")
         return instance_load
 
 

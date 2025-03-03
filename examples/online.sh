@@ -1,4 +1,4 @@
-export CONFIG_PATH="/root/llm/disagg/llumnix/configs/default.yml"
+export CONFIG_PATH="/root/llm/disagg/llumnix/configs/bench.yml"
 export MODEL_PATH="/root/share/models/Qwen2.5-7B-Instruct"
 # Configure on all nodes.
 export HEAD_NODE_IP_ADDRESS=127.0.0.1

@@ -67,8 +67,8 @@ _C.MANAGER.DISABLE_LOG_REQUESTS_MANAGER = False
 _C.MANAGER.LOG_INSTANCE_INFO = False
 # Log filename
 _C.MANAGER.LOG_FILENAME = "server.log"
-# Zhixin: Logdir for tensorboard, default = None
-_C.MANAGER.LOG_TENSORBOARD_DIR = None
+# Zhixin: Enable tensorboardX logger
+_C.MANAGER.ENABLE_TENSORBOARD = False
 # Enable port increment when deploying multiple servers
 _C.MANAGER.ENABLE_PORT_INCREMENT = False
 # Enable store port offset when deploying multiple servers

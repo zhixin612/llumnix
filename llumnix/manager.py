@@ -20,9 +20,9 @@ from typing import Dict, List, Tuple, Union, Iterable
 from collections import defaultdict
 import traceback
 from functools import partial
+from multiprocessing import Process, Queue
 
 import numpy as np
-import tensorboardX
 from tensorboardX import SummaryWriter
 
 import ray
@@ -53,6 +53,163 @@ logger = init_logger(__name__)
 
 
 # TODO(s5u13b): Handle exception of ray operations.
+
+# TODO(Zhixin): Move the tensorboard writer to a separate process.
+
+class TensorWriter(Process):
+    def __init__(self, info_que: Queue, logdir: str, filename_suffix: str = None, flush_secs: int = 5):
+        super().__init__()
+        self.info_que = info_que
+        self.writer = SummaryWriter(logdir=logdir, filename_suffix=filename_suffix, flush_secs=flush_secs)
+        self.step = 0
+        # only used for parent process
+        self.instance_id_str = {
+            InstanceType.PREFILL: 0,
+            InstanceType.DECODE: 0,
+            InstanceType.NO_CONSTRAINTS: 0,
+        }
+
+    # only used for parent process
+    def convert_instance_id(self, instance_type: InstanceType):
+        instance_id_str = str(self.instance_id_str[instance_type])
+        self.instance_id_str[instance_type] += 1
+        return str(instance_id_str)
+
+    def run(self) -> None:
+        try:
+            while True:
+                if self.info_que.qsize() > 1:
+                    logger.warning(f"TensorWriter queue size is too large: {self.info_que.qsize()}")
+                tag, infos = self.info_que.get()  # tag: 'instance', 'migration'
+                self.write_info(tag, infos)
+        except Exception as e:
+            logger.error(f"[ERROR] Tensorboard: Unexpected exception: {e}")
+            logger.error(f"[ERROR] Tensorboard: Exception traceback: {traceback.format_exc()}")
+
+    def write_info(self, tag: str, infos: List[InstanceInfo] or Dict):
+        if tag == 'migration':
+            self.writer.add_scalar('scheduler.mig/blocks_cnt', infos['blocks_cnt'], self.step)
+            self.writer.add_scalar('scheduler.mig/request_cnt', infos['request_cnt'], self.step)
+        elif tag == 'instance':
+            # split prefill and decode info
+            pinfos = [info for info in infos if info.instance_type == InstanceType.PREFILL]
+            dinfos = [info for info in infos if info.instance_type == InstanceType.DECODE]
+
+            # INFO: instance info
+            self.writer.add_scalar('scheduler/num_instances', len(infos), self.step)
+            self.writer.add_scalar('scheduler/num_instances_prefill', len(pinfos), self.step)
+            self.writer.add_scalar('scheduler/num_instances_decode', len(dinfos), self.step)
+
+            # INFO: gpu mem info
+            if len(pinfos):
+                self.writer.add_scalar('scheduler.mem/P/usage_avg', np.average(
+                    [info.gpu_cache_usage for info in pinfos]), self.step)
+                self.writer.add_scalar('scheduler.mem/P/used_blocks_tot', np.average(
+                    [info.num_used_gpu_blocks for info in pinfos]), self.step)
+                self.writer.add_scalar('scheduler.mem/P/available_blocks_tot', np.sum(
+                    [info.num_available_gpu_blocks for info in pinfos]), self.step)
+            if len(dinfos):
+                self.writer.add_scalar('scheduler.mem/D/usage_avg', np.average(
+                    [info.gpu_cache_usage for info in dinfos]), self.step)
+                self.writer.add_scalar('scheduler.mem/D/used_blocks_tot', np.average(
+                    [info.num_used_gpu_blocks for info in dinfos]), self.step)
+                self.writer.add_scalar('scheduler.mem/D/available_blocks_tot', np.sum(
+                    [info.num_available_gpu_blocks for info in dinfos]), self.step)
+
+            # INFO: load info
+            loads = {}
+            if len(pinfos):
+                loads.update({
+                    'scheduler.load/P/load_dispatch_std': np.std([info.dispatch_load_metric for info in pinfos]),
+                    'scheduler.load/P/load_migration_std': np.std([info.migration_load_metric for info in pinfos]),
+                })
+            if len(dinfos):
+                loads.update({
+                    'scheduler.load/D/load_dispatch_std': np.std([info.dispatch_load_metric for info in dinfos]),
+                    'scheduler.load/D/load_migration_std': np.std([info.migration_load_metric for info in dinfos]),
+                })
+            # 'scheduler.load/load_dispatch_min': min([info.dispatch_load_metric for info in infos]),
+            # 'scheduler.load/load_dispatch_max': max([info.dispatch_load_metric for info in infos]),
+            # 'scheduler.load/load_migration_min': min([info.migration_load_metric for info in infos]),
+            # 'scheduler.load/load_migration_max': max([info.migration_load_metric for info in infos]),
+            # convert inf & -inf to 1e5 & -1e5, convert nan to 0
+            for key, value in loads.items():
+                if np.isinf(value):
+                    logger.error(f"inf value: {key}, {value}")
+                    loads[key] = 1e5 if value > 0 else -1e5
+                elif np.isnan(value):
+                    logger.error(f"nan value: {key}, {value}")
+                    loads[key] = 0
+                self.writer.add_scalar(key, loads[key], self.step)
+
+            # INFO: request & compute info
+            if len(pinfos):
+                self.writer.add_scalar('scheduler.req/P/batch_size_avg', np.average(
+                    [info.num_batched_tokens for info in pinfos]) if len(pinfos) > 0 else 0, self.step)
+                self.writer.add_scalar('scheduler.req/P/running_tot', np.sum(
+                    [info.num_running_requests for info in pinfos]) if len(pinfos) > 0 else 0, self.step)
+                self.writer.add_scalar('scheduler.req/P/waiting_tot', np.sum(
+                    [info.num_running_requests for info in pinfos]) if len(pinfos) > 0 else 0, self.step)
+            if len(dinfos):
+                self.writer.add_scalar('scheduler.req/D/batch_size_avg', np.average(
+                    [info.num_batched_tokens for info in dinfos]) if len(dinfos) > 0 else 0, self.step)
+                self.writer.add_scalar('scheduler.req/D/running_tot', np.sum(
+                    [info.num_running_requests for info in dinfos]) if len(dinfos) > 0 else 0, self.step)
+                self.writer.add_scalar('scheduler.req/D/waiting_tot', np.sum(
+                    [info.num_running_requests for info in dinfos]) if len(dinfos) > 0 else 0, self.step)
+
+            # instance info ********************************************************************************************
+            # TODO(Zhixin): timestamp and step of each instance haven't been used. Not precise currently.
+
+            # INFO: mem info
+            self.writer.add_scalars('instance.mem/cache_usage',
+                                    {info.instance_id_str: info.gpu_cache_usage for info in infos}, self.step)
+            self.writer.add_scalars('instance.mem/available_blocks',
+                                    {info.instance_id_str: info.num_available_gpu_blocks for info in infos}, self.step)
+            # self.writer.add_scalars('instance/other/num_blocks_first_waiting_request',
+            #                         {info.instance_id_str: info.num_blocks_first_waiting_request
+            #                          for info in infos}, self.step)
+            self.writer.add_scalars('instance.mem/num_blocks_all_waiting_requests',
+                                    {info.instance_id_str: info.num_blocks_all_waiting_requests
+                                     for info in infos}, self.step)
+
+            # INFO: load info
+            load_dispatch = {info.instance_id_str: info.dispatch_load_metric for info in infos}
+            load_migration = {info.instance_id_str: info.migration_load_metric for info in infos}
+            # convert inf & -inf to 1e5 & -1e5, convert nan to 0
+            for key, value in load_dispatch.items():
+                if np.isinf(value):
+                    logger.error(f"inf value: {key}, {value}")
+                    load_dispatch[key] = 1e5 if value > 0 else -1e5
+                elif np.isnan(value):
+                    logger.error(f"nan value: {key}, {value}")
+                    load_dispatch[key] = 0
+            for key, value in load_migration.items():
+                if np.isinf(value):
+                    logger.error(f"inf value: {key}, {value}")
+                    load_migration[key] = 1e5 if value > 0 else -1e5
+                elif np.isnan(value):
+                    logger.error(f"nan value: {key}, {value}")
+                    load_migration[key] = 0
+            self.writer.add_scalars('instance.load/load', load_dispatch, self.step)
+            self.writer.add_scalars('instance.load/migration', load_migration, self.step)
+
+            # INFO: request & compute info
+            self.writer.add_scalars('instance.req/running',
+                                    {info.instance_id_str: info.num_running_requests for info in infos}, self.step)
+            self.writer.add_scalars('instance.req/waiting',
+                                    {info.instance_id_str: info.num_waiting_requests for info in infos}, self.step)
+            self.writer.add_scalars('instance.req/batch_size',
+                                    {info.instance_id_str: info.num_batched_tokens for info in infos}, self.step)
+            # self.writer.add_scalars('instance/other/num_seqs',
+            #                                     {info.instance_id_str: len(info.running_seq_lens) for info in
+            #                                      infos}, self.step)
+            # self.writer.add_scalars('instance/other/waiting_time_first_waiting_request',
+            #                                     {info.instance_id_str: info.waiting_time_first_waiting_request
+            #                                      for info in infos}, self.step)
+
+            self.writer.flush()
+            self.step += 1  # only increase step when write instance info
 
 
 class Manager:
@@ -110,22 +267,30 @@ class Manager:
                                            manager_args.enable_engine_pd_disagg, manager_args.pd_ratio)
 
         # Zhixin: tensorboard logger
-        self.tensorboard_logdir = manager_args.log_tensorboard_dir
-        self.tensorboard_writer = None
-        if self.tensorboard_logdir is not None:
-            self.tensorboard_step = 0
-            os.makedirs(self.tensorboard_logdir, exist_ok=True)
-            self.tensorboard_writer = tensorboardX.SummaryWriter(
-                logdir=self.tensorboard_logdir,
-                filename_suffix=".manager",
-                flush_secs=5,
-            )
-            # set instance_id_str to instances for tensorboard
-            self.tensorboard_instance_id_str = {
-                InstanceType.PREFILL: 0,
-                InstanceType.DECODE: 0,
-                InstanceType.NO_CONSTRAINTS: 0,
-            }
+        # TODO(Zhixin): add a parameter to disable or enable tensorboard writer
+        self.tensor_logdir = manager_args.log_filename
+        self.enable_tensorboard = self.tensor_logdir is not None
+        if self.enable_tensorboard:
+            self.tensor_queue = Queue()
+            self.tensor_writer = TensorWriter(self.tensor_queue, manager_args.log_filename, ".manager")
+            self.tensor_writer.start()
+
+        # self.tensorboard_logdir = manager_args.log_filename
+        # self.tensorboard_writer = None
+        # if self.tensorboard_logdir is not None:
+        #     self.tensorboard_step = 0
+        #     os.makedirs(self.tensorboard_logdir, exist_ok=True)
+        #     self.tensorboard_writer = tensorboardX.SummaryWriter(
+        #         logdir=self.tensorboard_logdir,
+        #         filename_suffix=".manager",
+        #         flush_secs=5,
+        #     )
+        #     # set instance_id_str to instances for tensorboard
+        #     self.tensorboard_instance_id_str = {
+        #         InstanceType.PREFILL: 0,
+        #         InstanceType.DECODE: 0,
+        #         InstanceType.NO_CONSTRAINTS: 0,
+        #     }
 
         # log args
         self.log_requests = not manager_args.disable_log_requests_manager
@@ -164,10 +329,6 @@ class Manager:
         asyncio.create_task(self._update_instance_info_loop(self.polling_interval))
         asyncio.create_task(self._clear_request_instance_loop(CLEAR_REQUEST_INSTANCE_INTERVAL))
 
-        # Yongfeng: migration counter
-        if self.enable_migration:
-            asyncio.create_task(self._update_migration_info_loop(1))  # TODO(Zhixin): add parameter for migration counter
-
         if hasattr(self, "launch_mode") and self.launch_mode == LaunchMode.GLOBAL:
             assert self.entrypoints_args is not None and self.engine_args is not None
             self.last_timeout_instance_id = None
@@ -176,7 +337,7 @@ class Manager:
             if self.manager_args.enable_pd_disagg:
                 asyncio.create_task(self._check_pd_deployment_states_loop(CHECK_DEPLOYMENT_STATES_INTERVAL))
 
-    async def generate(self, request_id: str, server_info: ServerInfo, *args, **kwargs,) -> None:
+    async def generate(self, request_id: str, server_info: ServerInfo, *args, **kwargs, ) -> None:
         while self.num_instances == 0:
             logger.warning("No instance available now, sleep {}s, "
                            "and regenerate request {}.".format(NO_INSTANCE_RETRY_INTERVAL, request_id))
@@ -254,23 +415,15 @@ class Manager:
                 if self.enable_migration and self.num_instance_info_updates != 0 \
                         and self.num_instance_info_updates % self.pair_migration_frequency == 0:
                     asyncio.create_task(self._push_migrations())
+                    # Zhixin: log migration info to tensorboard
+                    if self.enable_tensorboard:
+                        self.tensor_queue.put(('migration', {
+                            'blocks_cnt': self.migration_blocks_num,
+                            'request_cnt': self.migration_request_num,
+                        }))
                 if self.log_instance_info:
                     self._log_instance_infos_to_csv(instance_infos)
             # pylint: disable=W0703
-            except Exception as e:
-                logger.error("Unexpected exception: {}".format(e))
-                logger.error("Exception traceback: {}".format(traceback.format_exc()))
-
-    # Yongfeng: record migration info
-    async def _update_migration_info_loop(self, interval: float) -> None:
-        while True:
-            try:
-                await asyncio.sleep(interval)
-                if self.enable_migration and self.tensorboard_writer:
-                    self.tensorboard_writer.add_scalar('scheduler/migration/blocks_cnt',
-                                                       self.migration_blocks_num, self.tensorboard_step)
-                    self.tensorboard_writer.add_scalar('scheduler/migration/request_cnt',
-                                                       self.migration_request_num, self.tensorboard_step)
             except Exception as e:
                 logger.error("Unexpected exception: {}".format(e))
                 logger.error("Exception traceback: {}".format(traceback.format_exc()))
@@ -316,10 +469,10 @@ class Manager:
                     # Zhixin: increase indent to avoid empty migration message
                     logger.info("instance {}->{} migrate done, migrate request {}".format(
                         migrate_instance_pair[0], migrate_instance_pair[1], migrate_out_request_ids))
-                # Yongfeng: count all type of migration
-                # if pair_migration_type == PairMigrationConstraints.DECODING_2_DECODING:
-                self.migration_request_num += len(migrate_out_request_ids)
-                self.migration_blocks_num += migrate_item[1]
+                # Yongfeng: [important] type of migration to count
+                if pair_migration_type == PairMigrationConstraints.DECODING_2_DECODING:
+                    self.migration_request_num += len(migrate_out_request_ids)
+                    self.migration_blocks_num += migrate_item[1]
 
         def migrate_done_callback_wrapper(migrate_instance_pair: Tuple[str, str], fut) -> None:
             ret = fut.result()
@@ -383,11 +536,10 @@ class Manager:
                     continue
 
                 # Zhixin: add instance_id_str for tensorboard
-                if self.tensorboard_writer is not None:
+                if self.enable_tensorboard:
                     next_instance_args = self.launcher._get_next_instance_args(self.instance_args)
                     instance_type = next_instance_args.instance_type
-                    instance_id_str = str(self.tensorboard_instance_id_str[instance_type])
-                    self.tensorboard_instance_id_str[instance_type] += 1
+                    instance_id_str = self.tensor_writer.convert_instance_id(instance_type)
                 else:
                     instance_id_str = "NONE"
 
@@ -595,11 +747,10 @@ class Manager:
         instances: List[Llumlet] = []
         for _ in range(self.manager_args.initial_instances):
             # Zhixin: add instance_id_str
-            if self.tensorboard_writer is not None:
-                instance_id_str = self.tensorboard_instance_id_str[instance_args.instance_type]
-                self.tensorboard_instance_id_str[instance_args.instance_type] += 1
+            if self.enable_tensorboard:
+                instance_id_str = self.tensor_writer.convert_instance_id(instance_args.instance_type)
             else:
-                instance_id_str = 999
+                instance_id_str = "NONE"
 
             instance_id = random_uuid()
             placement_group = self.launcher.init_placement_group(get_placement_group_name(instance_id), engine_args,
@@ -761,6 +912,7 @@ class Manager:
     def _init_instance_info_csv(self, manager_args: ManagerArgs) -> None:
         # pylint: disable=consider-using-with
         # self.instance_info_file = open(manager_args.log_filename + '_instance.csv', 'w', encoding='utf-8')
+        os.makedirs(manager_args.log_filename, exist_ok=True)
         self.instance_info_file = open(os.path.join(manager_args.log_filename, 'instance_info.csv'), 'w',
                                        encoding='utf-8')
         self.instance_info_csv = csv.writer(self.instance_info_file)
@@ -787,7 +939,6 @@ class Manager:
 
     def _log_instance_infos_to_csv(self, instance_infos: List[InstanceInfo]) -> None:
         should_tensorboard = False  # Zhixin: update tensorboard only when instance info updated
-        instance_infos_updated: List[InstanceInfo] = []
 
         for instance_info in instance_infos:
             instance_id = instance_info.instance_id
@@ -796,7 +947,6 @@ class Manager:
                     gpu_cache_usage == 0 and not self.instance_last_logged_empty[instance_id])
             if should_log:
                 should_tensorboard = True  # Zhixin
-                instance_infos_updated.append(instance_info)  # Zhixin
                 self.instance_last_logged_empty[instance_id] = (gpu_cache_usage == 0)
                 self.instance_info_csv.writerow([
                     instance_info.timestamp,
@@ -821,148 +971,5 @@ class Manager:
         self.instance_info_file.flush()
 
         # Zhixin: tensorboard logger
-        _start = time.time()
-        if self.tensorboard_writer is not None and should_tensorboard:
-            # scheduler info *******************************************************************************************
-            # self.tensorboard_writer.add_scalar('scheduler/num_instances', self.num_instances, self.tensorboard_step)
-            # self.tensorboard_writer.add_scalar('scheduler/num_instances_prefill',
-            #                                    len([info for info in instance_infos if
-            #                                       info.instance_type == InstanceType.PREFILL]), self.tensorboard_step)
-            # self.tensorboard_writer.add_scalar('scheduler/num_instances_decode',
-            #                                    len([info for info in instance_infos if
-            #                                       info.instance_type == InstanceType.DECODE]), self.tensorboard_step)
-            self.tensorboard_writer.add_scalar('scheduler/gpu_cache_usage_avg',
-                                               np.average([info.gpu_cache_usage for info in instance_infos]),
-                                               self.tensorboard_step)
-            self.tensorboard_writer.add_scalar('scheduler/gpu_available_blocks_total',
-                                               sum([info.num_available_gpu_blocks for info in
-                                                    instance_infos]), self.tensorboard_step)
-            loads = {
-                'scheduler/load_dispatch_min': min([info.dispatch_load_metric for info in instance_infos]),
-                'scheduler/load_dispatch_max': max([info.dispatch_load_metric for info in instance_infos]),
-                'scheduler/load_migration_min': min([info.migration_load_metric for info in instance_infos]),
-                'scheduler/load_migration_max': max([info.migration_load_metric for info in instance_infos]),
-            }
-            # convert inf & -inf to 1e5 & -1e5, convert nan to 0
-            for key, value in loads.items():
-                if np.isinf(value):
-                    loads[key] = 1e5 if value > 0 else -1e5
-                elif np.isnan(value):
-                    loads[key] = 0
-                self.tensorboard_writer.add_scalar(key, loads[key], self.tensorboard_step)
-
-            self.tensorboard_writer.add_scalar('scheduler/requests_running_total',
-                                               sum([info.num_running_requests for info in instance_infos]),
-                                               self.tensorboard_step)
-            self.tensorboard_writer.add_scalar('scheduler/requests_waiting_total',
-                                               sum([info.num_waiting_requests for info in instance_infos]),
-                                               self.tensorboard_step)
-            self.tensorboard_writer.add_scalar('scheduler/requests_killed_total',
-                                               sum([info.num_killed_requests for info in instance_infos]),
-                                               self.tensorboard_step)
-
-            # logger.warning("[TENSORBOARD] scheduler/num_instances: {}".format(self.num_instances))
-            # logger.warning("[TENSORBOARD] scheduler/num_instances_prefill: {}".format(
-            #     len([info for info in instance_infos if info.instance_type == InstanceType.PREFILL])))
-            # logger.warning("[TENSORBOARD] scheduler/num_instances_decode: {}".format(
-            #     len([info for info in instance_infos if info.instance_type == InstanceType.DECODE])))
-            # logger.warning("[TENSORBOARD] scheduler/gpu_cache_usage_avg: {}".format(
-            #     np.average([info.gpu_cache_usage for info in instance_infos])))
-            # logger.warning("[TENSORBOARD] scheduler/gpu_available_blocks_total: {}".format(
-            #     sum([info.num_available_gpu_blocks for info in instance_infos])))
-            # logger.warning("[TENSORBOARD] scheduler/load_dispatch_avg: {}".format(
-            #     np.average([info.dispatch_load_metric for info in instance_infos])))
-            # logger.warning("[TENSORBOARD] scheduler/load_migration_avg: {}".format(
-            #     np.average([info.migration_load_metric for info in instance_infos])))
-            # logger.warning("[TENSORBOARD] scheduler/requests_running_total: {}".format(
-            #     sum([info.num_running_requests for info in instance_infos])))
-            # logger.warning("[TENSORBOARD] scheduler/requests_waiting_total: {}".format(
-            #     sum([info.num_waiting_requests for info in instance_infos])))
-            # logger.warning("[TENSORBOARD] scheduler/requests_killed_total: {}".format(
-            #     sum([info.num_killed_requests for info in instance_infos])))
-
-            # no logged infos:
-            # timestamp, step_id, inference_type, num_batched_tokens, profiling_data, running_seq_lens, num_seqs,
-            # num_blocks_first_waiting_request, num_blocks_all_waiting_requests, waiting_time_first_waiting_request
-            # NOTE: running_seq_lens->List  |  num_seqs=None by default
-
-            # instance info ********************************************************************************************
-            # TODO(Zhixin): timestamp and step of each instance haven't been used. Not precise currently.
-            self.tensorboard_writer.add_scalars('instance/gpu_cache_usage',
-                                                {info.instance_id_str: info.gpu_cache_usage for info in
-                                                 instance_infos_updated},
-                                                self.tensorboard_step)
-            self.tensorboard_writer.add_scalars('instance/gpu_available_blocks',
-                                                {info.instance_id_str: info.num_available_gpu_blocks for info in
-                                                 instance_infos_updated},
-                                                self.tensorboard_step)
-            load_dispatch = {info.instance_id_str: info.dispatch_load_metric for info in instance_infos_updated}
-            load_migration = {info.instance_id_str: info.migration_load_metric for info in instance_infos_updated}
-            # convert inf & -inf to 1e5 & -1e5, convert nan to 0
-            for key, value in load_dispatch.items():
-                if np.isinf(value):
-                    load_dispatch[key] = 1e5 if value > 0 else -1e5
-                elif np.isnan(value):
-                    load_dispatch[key] = 0
-            for key, value in load_migration.items():
-                if np.isinf(value):
-                    load_migration[key] = 1e5 if value > 0 else -1e5
-                elif np.isnan(value):
-                    load_migration[key] = 0
-            self.tensorboard_writer.add_scalars('instance/load_dispatch', load_dispatch, self.tensorboard_step)
-            self.tensorboard_writer.add_scalars('instance/load_migration', load_migration, self.tensorboard_step)
-            self.tensorboard_writer.add_scalars('instance/requests_running',
-                                                {info.instance_id_str: info.num_running_requests for info in
-                                                 instance_infos_updated},
-                                                self.tensorboard_step)
-            self.tensorboard_writer.add_scalars('instance/requests_waiting',
-                                                {info.instance_id_str: info.num_waiting_requests for info in
-                                                 instance_infos_updated},
-                                                self.tensorboard_step)
-            self.tensorboard_writer.add_scalars('instance/requests_killed',
-                                                {info.instance_id_str: info.num_killed_requests for info in
-                                                 instance_infos_updated},
-                                                self.tensorboard_step)
-            self.tensorboard_writer.add_scalars('instance/other/num_seqs',
-                                                {info.instance_id_str: len(info.running_seq_lens) for info in
-                                                 instance_infos_updated},
-                                                self.tensorboard_step)
-            self.tensorboard_writer.add_scalars('instance/other/num_blocks_first_waiting_request',
-                                                {info.instance_id_str: info.num_blocks_first_waiting_request for info in
-                                                 instance_infos_updated},
-                                                self.tensorboard_step)
-            self.tensorboard_writer.add_scalars('instance/other/num_blocks_all_waiting_requests',
-                                                {info.instance_id_str: info.num_blocks_all_waiting_requests for info in
-                                                 instance_infos_updated},
-                                                self.tensorboard_step)
-            self.tensorboard_writer.add_scalars('instance/other/waiting_time_first_waiting_request',
-                                                {info.instance_id_str: info.waiting_time_first_waiting_request for info
-                                                 in instance_infos_updated},
-                                                self.tensorboard_step)
-
-            # logger.warning("[TENSORBOARD] instance/gpu_cache_usage: {}".format(
-            #     {info.instance_id: 1 for info in instance_infos_updated}))
-            # logger.warning("[TENSORBOARD] instance/gpu_available_blocks: {}".format(
-            #     {info.instance_id: 1 for info in instance_infos_updated}))
-            # logger.warning("[TENSORBOARD] instance/load_dispatch: {}".format(
-            #     {info.instance_id: 1 for info in instance_infos_updated}))
-            # logger.warning("[TENSORBOARD] instance/load_migration: {}".format(
-            #     {info.instance_id: 1 for info in instance_infos_updated}))
-            # logger.warning("[TENSORBOARD] instance/requests_running: {}".format(
-            #     {info.instance_id: 1 for info in instance_infos_updated}))
-            # logger.warning("[TENSORBOARD] instance/requests_waiting: {}".format(
-            #     {info.instance_id: 1 for info in instance_infos_updated}))
-            # logger.warning("[TENSORBOARD] instance/requests_killed: {}".format(
-            #     {info.instance_id: 1 for info in instance_infos_updated}))
-            # logger.warning("[TENSORBOARD] instance/other/num_seqs: {}".format(
-            #     {info.instance_id: 1 for info in instance_infos_updated}))
-            # logger.warning("[TENSORBOARD] instance/other/num_blocks_first_waiting_request: {}".format(
-            #     {info.instance_id: 1 for info in instance_infos_updated}))
-            # logger.warning("[TENSORBOARD] instance/other/num_blocks_all_waiting_requests: {}".format(
-            #     {info.instance_id: 1 for info in instance_infos_updated}))
-            # logger.warning("[TENSORBOARD] instance/other/waiting_time_first_waiting_request: {}".format(
-            #     {info.instance_id: 1 for info in instance_infos_updated}))
-
-            self.tensorboard_writer.flush()
-            self.tensorboard_step += 1
-            logger.warning("$$$$$ time for tensorboard_writer: {:.2} ms".format(1000 * (time.time() - _start)))
+        if self.enable_tensorboard and should_tensorboard:
+            self.tensor_queue.put(('instance', instance_infos))

@@ -28,9 +28,9 @@ if __name__ == "__main__":
     entrypoints_args, manager_args, instance_args, engine_args = get_args(cfg, LaunchMode.GLOBAL, parser, cli_args)
 
     # save config to tensorboard
-    if manager_args.log_tensorboard_dir is not None:
+    if manager_args.enable_tensorboard:
         import tensorboardX
-        writer = tensorboardX.SummaryWriter(manager_args.log_tensorboard_dir, filename_suffix='.manager')
+        writer = tensorboardX.SummaryWriter(manager_args.log_filename, filename_suffix='.manager')
         writer.add_text('config/entrypoints_args', str(entrypoints_args))
         writer.add_text('config/manager_args', str(manager_args))
         writer.add_text('config/instance_args', str(instance_args))

@@ -36,7 +36,8 @@ class LocalMigrationScheduler:
             elif self.request_migration_policy == 'FCW':
                 migrate_out_requests = self._get_first_waiting_request(min_request_len, max_request_len)
             elif self.request_migration_policy == 'FCWSR':
-                migrate_out_requests = self._get_first_waiting_and_shortest_running_requests(min_request_len, max_request_len)
+                migrate_out_requests = self._get_first_waiting_and_shortest_running_requests(min_request_len,
+                                                                                             max_request_len)
         return migrate_out_requests
 
     # The function is used to retrieve requests on the backend that have already met the expected_steps.
@@ -47,29 +48,29 @@ class LocalMigrationScheduler:
         required_migration_requests = []
         for request in reversed(running):
             if request.status == RequestStatus.RUNNING \
-                and request.inference_type == RequestInferenceType.DECODE \
-                and request.output_len >= request.expected_steps:
+                    and request.inference_type == RequestInferenceType.DECODE \
+                    and request.output_len >= request.expected_steps:
                 required_migration_requests.append(request)
         return required_migration_requests
 
     def _filter_running_queue(self, running, min_request_len, max_request_len):
         filtered_running = [
             request for request in running \
-                if request.status == RequestStatus.RUNNING \
-                    and request.inference_type == RequestInferenceType.DECODE \
-                    and min_request_len < request.request_len < max_request_len \
-                    and (not request.is_migrating) \
-        ]
+            if request.status == RequestStatus.RUNNING \
+               and request.inference_type == RequestInferenceType.DECODE \
+               and min_request_len < request.request_len < max_request_len \
+               and (not request.is_migrating) \
+            ]
         return filtered_running
 
     def _filter_waiting_queue(self, waiting, min_request_len, max_request_len):
         filtered_waiting = [
             request for request in waiting \
-                if request.status == RequestStatus.WAITING \
-                    and request.try_schedule_times >= 1 \
-                    and min_request_len < request.request_len < max_request_len \
-                    and (not request.is_migrating) \
-        ]
+            if request.status == RequestStatus.WAITING \
+               and request.try_schedule_times >= 1 \
+               and min_request_len < request.request_len < max_request_len \
+               and (not request.is_migrating) \
+            ]
         return filtered_waiting
 
     def _get_last_running_request(self, min_request_len, max_request_len):
@@ -81,14 +82,14 @@ class LocalMigrationScheduler:
         running: Deque[LlumnixRequest] = self.backend_engine.get_running_queue()
         filtered_running = self._filter_running_queue(running, min_request_len, max_request_len)
         longest_seq_group = max((request for request in filtered_running), \
-                                 key=lambda request: request.request_len, default=None)
+                                key=lambda request: request.request_len, default=None)
         return [longest_seq_group] if longest_seq_group is not None else []
 
     def _get_shortest_running_request(self, min_request_len, max_request_len) -> List[LlumnixRequest]:
         running: Deque[LlumnixRequest] = self.backend_engine.get_running_queue()
         filtered_running = self._filter_running_queue(running, min_request_len, max_request_len)
         shortest_seq_group = min((request for request in filtered_running), \
-                                  key=lambda request: request.request_len, default=None)
+                                 key=lambda request: request.request_len, default=None)
         return [shortest_seq_group] if shortest_seq_group is not None else []
 
     def _get_first_waiting_request(self, min_request_len, max_request_len) -> List[LlumnixRequest]:
@@ -96,7 +97,8 @@ class LocalMigrationScheduler:
         filtered_waiting = self._filter_waiting_queue(waiting, min_request_len, max_request_len)
         return [waiting[0]] if filtered_waiting else []
 
-    def _get_first_waiting_and_shortest_running_requests(self, min_request_len, max_request_len) -> List[LlumnixRequest]:
+    def _get_first_waiting_and_shortest_running_requests(self, min_request_len, max_request_len) -> List[
+        LlumnixRequest]:
         waiting_requests = self._get_first_waiting_request(min_request_len, max_request_len)
         running_requests = self._get_shortest_running_request(min_request_len, max_request_len)
         if waiting_requests:

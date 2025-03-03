@@ -15,9 +15,6 @@
 import subprocess
 import threading
 import multiprocessing
-
-multiprocessing.set_start_method('spawn', True)  # avoid tokenizer warning
-
 import aiohttp
 import argparse
 import asyncio
@@ -30,12 +27,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 import sys
 import glob
+import tensorboardX
 
 from scipy.stats import zipf
 from enum import Enum
 from transformers import AutoTokenizer
 from typing import List
-import tensorboardX
+
+multiprocessing.set_start_method('spawn', True)  # avoid tokenizer warning
 
 num_finished_requests = 0
 server_num_requests = {}
@@ -49,8 +48,10 @@ def get_wait_time(mean_time_between_requests: float, distribution: str, coeffici
         shape = mean_time_between_requests ** 2 / variance
         scale = variance / mean_time_between_requests
         return np.random.gamma(shape, scale)
-    else:
+    elif distribution == "poisson":
         return np.random.exponential(mean_time_between_requests)
+    else:
+        raise ValueError(f"Unknown distribution: {distribution}")
 
 
 def request_gen(generator, qps: float, distribution="uniform"):
@@ -154,25 +155,18 @@ def calculate_throughput(queries,
                          fail_on_response_failure):
     prompts = []
     responses = []
-    naive_hf_lens = []
-    ft_lens = []
     expected_response_lens = []
-    ray_gen_lens = []
     cf_gen_lens = []
     for prompt, response in queries:
         if 'generated_text' in response:
             prompts.append(prompt)
             responses.append(response['generated_text'])
-        if 'naive_hf_lens' in response:
-            naive_hf_lens.append(response['naive_hf_lens'])
-        if 'ray_gen_len' in response:
-            ray_gen_lens.append(response['ray_gen_len'])
         if 'num_output_tokens_cf' in response:
             cf_gen_lens.append(response['num_output_tokens_cf'])
         if 'response_len' in response:
             expected_response_lens.append(response['response_len'])
-    prompt_ids = [p for p in tokenizer.batch_encode_plus(prompts)['input_ids']]
-    response_ids = [r for r in tokenizer.batch_encode_plus(responses)['input_ids']]
+    # prompt_ids = [p for p in tokenizer.batch_encode_plus(prompts)['input_ids']]
+    # response_ids = [r for r in tokenizer.batch_encode_plus(responses)['input_ids']]
 
     # print(f'check_len actual {list(sorted(len(response) for response in response_ids))}')
     # print(f'check_len expect {list(sorted(expected_response_lens))}')
@@ -188,13 +182,9 @@ def calculate_throughput(queries,
         print(responses)
         raise
 
-    if naive_hf_lens:
-        print(f'naive_hf_lens {list(sorted(naive_hf_lens))}')
     print(f'prompt_lens {list(sorted(prompt_lens))}')
     print(f'response_lens {list(sorted(response_lens))}')
     print(f'expected_response_lens {list(sorted(expected_response_lens))}')
-    if ray_gen_lens:
-        print(f'ray_gen_lens {list(sorted(ray_gen_lens))}')
 
     prompt_token_count = sum(prompt_lens)
     response_token_count = sum(response_lens)
@@ -204,15 +194,6 @@ def calculate_throughput(queries,
     all_total_tokens = [all_prompt_lens[i] + all_response_lens[i] for i in range(len(all_prompt_lens))]
     all_waiting_latencies = [all_e2e_latencies[i] - all_inference_latencies[i] for i in range(len(all_e2e_latencies))]
 
-    if naive_hf_lens:
-        # Manually count naive hf tok len
-        total_resp_tokens = sum(
-            [response_len for _, response_len in naive_hf_lens])
-        total_prompt_tokens = sum(
-            [prompt_len for prompt_len, _ in naive_hf_lens])
-        response_token_count = total_prompt_tokens + total_resp_tokens
-    if ray_gen_lens:
-        response_token_count = sum(ray_gen_lens)
     if backend == GenerationBackend.NaiveHfPipeline:
         # It returns the prompt in the output.
         prompt_token_count = 0
@@ -223,6 +204,10 @@ def calculate_throughput(queries,
 
     # print(f'prompt_token_count {prompt_token_count} response_token_count {response_token_count}')
     throughput_tok_s = (prompt_token_count + response_token_count) / dur_s
+    # TODO(Zhixin): need more accurate calculation (dur_s is not accurate)
+    throughput_prefill = prompt_token_count / dur_s
+    throughput_decode = response_token_count / dur_s
+
     print(f'throughput_tok_s {throughput_tok_s:.02f}')
     qps = len(responses) / dur_s
     msg1 = f'backend {backend} dur_s {dur_s:.04f} tokens_per_s {throughput_tok_s:.02f} qps {qps:.04f}\n'
@@ -236,10 +221,9 @@ def calculate_throughput(queries,
     print(msg)
 
     if fail_on_response_failure:
-        assert len(responses) == len(queries), \
-            f"{fail_on_response_failure=}, expected number of successful respones to equal number of queries, got {len(responses)} vs {len(queries)}"
+        assert len(responses) == len(queries), f"{fail_on_response_failure=}, expected number of successful respones to equal number of queries, got {len(responses)} vs {len(queries)} "
 
-    return throughput_tok_s
+    return throughput_tok_s, throughput_prefill, throughput_decode
 
 
 def calculate_cdf(latencies):
@@ -510,13 +494,11 @@ async def benchmark(
     if distribution == "burst":
         qps = float('inf')
     if distribution != "gamma":
+        print(f'[WARNING] coefficient_variation is only supported for gamma distribution. Setting it to 0.0.')
         coefficient_variation = 0.0
 
-    print(
-        f'Starting with backend={backend}, num_prompts={len(prompts)}, allow_variable_generation_length={allow_variable_generation_length}')
+    print(f'Starting with backend={backend}, num_prompts={len(prompts)}, allow_variable_gen_length={allow_variable_generation_length}')
     print(f'traffic distribution={distribution}, qps={qps}, coefficient_variation={coefficient_variation}')
-
-    total_requests = len(prompts)
 
     async_prompts = async_request_gen(
         iter(prompts), qps=qps, distribution=distribution, coefficient_variation=coefficient_variation)
@@ -757,7 +739,7 @@ def gpu_utilization_monitor(log_dir, devices: str, running_event: threading.Even
     steps = 0
     while running_event.is_set():
         gpu_util = get_gpu_util()
-        writer.add_scalars('scheduler/gpu_util', {f'gpu_{gid}': util for gid, util in zip(gpu_ids, gpu_util)}, steps)
+        writer.add_scalars('scheduler.req/gpu_util', {f'gpu_{gid}': util for gid, util in zip(gpu_ids, gpu_util)}, steps)
         steps += 1
         time.sleep(interval_sec)
     writer.close()
@@ -782,9 +764,12 @@ def main():
     parser.add_argument('--max_request_len', type=int, default=8192)
 
     parser.add_argument(
-        '--distribution', choices=["burst", "uniform", "poisson", "gamma"], default="poisson")
+        '--distribution', choices=["burst", "uniform", "poisson", "gamma"], default="poisson",
+        help="burst: qps=inf, uniform: fixed qps, poisson & gamma: variable qps (only gamma support CV)")
     parser.add_argument('--qps', type=float, default=4.0)
-    parser.add_argument('--coefficient_variation', type=float, default=0.0)
+    parser.add_argument('--coefficient_variation', type=float, default=0.0,
+                        help="Coefficient of variation for the gamma distribution. "
+                             "(0<CV<1.0 for steady workload, =1.0 for poisson distribution, >1.0 for bursty workload)")
     parser.add_argument('--log_latencies', action="store_true",
                         help="Whether or not to write all latencies to the log file.")
     parser.add_argument('--fail_on_response_failure', action="store_true",
@@ -807,8 +792,8 @@ def main():
     parser.add_argument('--print_generation_lens_and_exit',
                         action='store_true')
 
-    parser.add_argument('--enable_migration', type=int, default=0)
-    parser.add_argument('--priority_ratio', type=float, default=0.0)
+    # parser.add_argument('--enable_migration', type=int, default=0)
+    # parser.add_argument('--priority_ratio', type=float, default=0.0)
 
     args = parser.parse_args()
 
@@ -932,23 +917,60 @@ def main():
     except FileNotFoundError:
         os.mknod(file_name)
 
-    with open(file_name, 'w') as f:
+    with open(file_name, 'w', encoding='utf-8') as f:
         data = {"qps": args.qps,
                 "cv": args.coefficient_variation,
-                "request_ids": request_ids,
-                "request_lens": request_lens,
-                "request_latencies": request_latencies,
-                "prefill_token_latencies": prefill_token_latencies,
-                "decode_token_latencies": decode_token_latencies,
-                "decode_sum_latencies": decode_sum_latencies,
-                "all_decode_token_latencies": all_decode_token_latencies,
-                "inference_latencies": inference_latencies,
+                "request_ids": request_ids,  # [num_requests]
+                "request_lens": request_lens,  # [num_requests]
+                "request_latencies": request_latencies,  # [num_requests]
+                "prefill_token_latencies": prefill_token_latencies,  # [num_requests]
+                "decode_token_latencies": decode_token_latencies,  # [num_requests]
+                "decode_sum_latencies": decode_sum_latencies,  # [num_requests]
+                "all_decode_token_latencies": all_decode_token_latencies,  # [SUM(tokens)]
+                "inference_latencies": inference_latencies,  # [num_requests]
                 "per_token_latencies_breakdown_dict": per_token_latencies_breakdown_dict,
-                "throughput": throughput,
-                "instance_num": avg_instance_num}
-        writer.add_text('results', data)
+                "throughput": throughput[0],  # tokens/s
+                "throughput_prefill": throughput[1],  # tokens/s
+                "throughput_decode": throughput[2],  # tokens/s
+                "instance_num": avg_instance_num  # gpu/s
+                }
+        # per_token_latencies_breakdown_dict: [{
+        #     'step_latency_engine': [],
+        #     'step_postprocess_latency': [],
+        #     'across_async_put_queue_thread_latency': [],
+        #     'across_async_put_queue_actor_latency': [],
+        #     'queue_rpc_latency': [],
+        #     'background_process_get_queue_latency': [],
+        #     'generate_benchmark_return_output_latency': []
+        # }]
+
         results.append(data)
         json.dump(results, f)
+
+    # Zhixin: log latency and throughput data to tensorboard
+    def cal_lat(latencies):
+        return "[P50, P80, P95, P99, P99.9, mean]: [{:.2f}, {:.2f}, {:.2f}, {:.2f}, {:.2f}, {:.2f}]".format(
+            np.percentile(latencies, 50),
+            np.percentile(latencies, 80),
+            np.percentile(latencies, 95),
+            np.percentile(latencies, 99),
+            np.percentile(latencies, 99.9),
+            np.mean(latencies),
+        )
+    workload = {
+        'qps': args.qps,
+        'cv': args.coefficient_variation,
+        'dataset': args.dataset_type,
+        'datapath': args.dataset_path,
+        'random_prompt_count': args.random_prompt_count,
+    }
+    writer.add_text('metric.workload', '\n'.join([f'{k}: {v}' for k, v in workload.items()]))
+    writer.add_text('metric.throughput', str(throughput[0]))
+    writer.add_text('metric.throughput_prefill', str(throughput[1]))
+    writer.add_text('metric.throughput_decode', str(throughput[2]))
+    writer.add_text('metric.latency_TTFT_ms', cal_lat(prefill_token_latencies))
+    writer.add_text('metric.latency_TBT_ms', cal_lat(decode_token_latencies))
+    writer.add_text('metric.latency_req_sec', cal_lat(request_latencies))
 
 
 if __name__ == '__main__':

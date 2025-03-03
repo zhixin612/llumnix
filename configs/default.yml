@@ -46,9 +46,10 @@ MANAGER:
   # Enable logging instance info
   LOG_INSTANCE_INFO: True  # Zhixin: board will be enabled only when this is True
   # Log filename
-  LOG_FILENAME: "/root/llm/disagg/llumnix/examples/logs/test_0220" # test_1P3D_sharegpt-1k_qps6-poi_0219
+  LOG_FILENAME: "/root/llm/disagg/llumnix/examples/logs/test/test_0228" # test_1P3D_sharegpt-1k_qps6-poi_0219
   # Zhixin: Logdir for tensorboard, default = None
-  LOG_TENSORBOARD_DIR: "/root/llm/disagg/llumnix/examples/logs/test_0220" # test_1P3D_sharegpt-1k_qps6-poi_0219
+  # test_1P3D_sharegpt-1k_qps6-poi_0219
+  ENABLE_TENSORBOARD: True
   # Enable port increment when deploying multiple servers
   ENABLE_PORT_INCREMENT: False
   # Enable store port offset when deploying multiple servers

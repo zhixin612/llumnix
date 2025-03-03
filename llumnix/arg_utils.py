@@ -138,7 +138,7 @@ class ManagerArgs:
     log_filename: str = None
 
     # Zhixin: add tensorboard support
-    log_tensorboard_dir: str = None
+    enable_tensorboard: str = None
 
     enable_port_increment: bool = None
     enable_port_offset_store: bool = None

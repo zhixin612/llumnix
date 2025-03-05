@@ -38,6 +38,7 @@ from typing import List, Dict, Tuple
 random.seed(0xCADE)
 np.random.seed(0xCADE)
 multiprocessing.set_start_method('spawn', True)  # avoid tokenizer warning
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 num_finished_requests = 0
 server_num_requests = {}
@@ -251,13 +252,15 @@ def calculate_goodput(
     prefill_latencies, decode_latencies, prompt_lens = \
         np.array(prefill_latencies), np.array(decode_latencies), np.array(prompt_lens)
 
-    goodput = {}
+    goodput_prefill = {}
+    goodput_decode = {}
     for slo in prefill_slos:
-        goodput[f'goodput_prefill_{slo}'] = np.sum(prompt_lens[prefill_latencies < slo]) / duration_s
+        goodput_prefill[slo] = np.sum(prompt_lens[prefill_latencies < slo]) / duration_s
     for slo in decode_slos:
-        goodput[f'goodput_decode_{slo}'] = np.sum(decode_latencies < slo) / duration_s
-    pprint(goodput)
-    return goodput
+        goodput_decode[slo] = np.sum(decode_latencies < slo) / duration_s
+    pprint(('goodput_prefill', goodput_prefill))
+    pprint(('goodput_decode', goodput_decode))
+    return goodput_prefill, goodput_decode
 
 
 def cal_lat(latencies):
@@ -581,7 +584,7 @@ async def benchmark(
         fail_on_response_failure,
         verbose)
 
-    goodput = calculate_goodput(
+    goodput_prefill, goodput_decode = calculate_goodput(
         dur_s,
         m._prefill_token_latencies,
         m._all_decode_token_latencies,
@@ -597,7 +600,8 @@ async def benchmark(
     avg_instance_num = 0.0
 
     return throughput, \
-           goodput, \
+           goodput_prefill, \
+           goodput_decode, \
            dur_s, \
            m._prefill_token_latencies, \
            m._decode_token_latencies, \
@@ -911,7 +915,8 @@ def main():
 
     # run benchmark
     throughput, \
-    goodput, \
+    goodput_prefill, \
+    goodput_decode, \
     duration_s, \
     prefill_token_latencies, \
     decode_token_latencies, \
@@ -961,17 +966,11 @@ def main():
                 "throughput_decode": throughput[2],  # tokens/s
                 "instance_num": avg_instance_num  # gpu/s
                 }
-        data.update(goodput)
+        for slo, gp in goodput_prefill.items():
+            data[f"goodput_prefill_{slo}"] = gp
+        for slo, gp in goodput_decode.items():
+            data[f"goodput_decode_{slo}"] = gp
         json.dump(data, f)
-        # per_token_latencies_breakdown_dict: [{
-        #     'step_latency_engine': [],
-        #     'step_postprocess_latency': [],
-        #     'across_async_put_queue_thread_latency': [],
-        #     'across_async_put_queue_actor_latency': [],
-        #     'queue_rpc_latency': [],
-        #     'background_process_get_queue_latency': [],
-        #     'generate_benchmark_return_output_latency': []
-        # }]
 
     # Zhixin: log latency and throughput data to tensorboard (text)
     workload = {
@@ -987,31 +986,24 @@ def main():
                                          f'{throughput[0]: .2f}, {throughput[1]: .2f}, {throughput[2]: .2f}')
     writer.add_text('metric.latency', f'overall | prefill | decode:  {cal_lat(request_latencies)}, '
                                       f'{cal_lat(prefill_token_latencies)}, {cal_lat(decode_token_latencies)}')
-    for item, gp in goodput.items():
-        writer.add_text(f'metric.{item}', str(gp))
-
-    # FIXME(Zhixin): wrong goodput calculation (use standalone test py)
-    """
-        "goodput_prefill_500": 5.57714823101328, 
-        "goodput_prefill_1000": 5.664291172122862, 
-        "goodput_prefill_2000": 5.69333881915939, 
-        "goodput_prefill_5000": 5.809529407305499, 
-        "goodput_decode_30": 0.034857176443832995, 
-        "goodput_decode_50": 3.328860350386051, 
-        "goodput_decode_100": 5.565529172198668, 
-        "goodput_decode_200": 5.652672113308251
-    """
+    writer.add_text('metric.goodput_prefill', str(goodput_prefill))
+    writer.add_text('metric.goodput_decode', str(goodput_decode))
 
     # Zhixin: log latency and throughput data to tensorboard (scalar)
-    writer.add_scalar('client/_metric.throughput', throughput[0], 0)
-    writer.add_scalar('client/_metric.throughput', throughput[0], 1)
-    writer.add_scalar('client/_metric.throughput_prefill', throughput[1], 0)
-    writer.add_scalar('client/_metric.throughput_prefill', throughput[1], 1)
-    writer.add_scalar('client/_metric.throughput_decode', throughput[2], 0)
-    writer.add_scalar('client/_metric.throughput_decode', throughput[2], 1)
-    for item, gp in goodput.items():
-        writer.add_scalar(f'client/_metric.{item}', gp, 0)
-        writer.add_scalar(f'client/_metric.{item}', gp, 1)
+    writer.add_scalars('client/_metric.throughput', {'total': throughput[0], 'prefill': throughput[1], 'decode': throughput[2]}, 0)
+    writer.add_scalars('client/_metric.throughput', {'total': throughput[0], 'prefill': throughput[1], 'decode': throughput[2]}, 1)
+    writer.add_scalars('client/_metric.goodput_prefill', {f'SLO-{slo}': gp for slo, gp in goodput_prefill.items()}, 0)
+    writer.add_scalars('client/_metric.goodput_prefill', {f'SLO-{slo}': gp for slo, gp in goodput_prefill.items()}, 1)
+    writer.add_scalars('client/_metric.goodput_decode', {f'SLO-{slo}': gp for slo, gp in goodput_decode.items()}, 0)
+    writer.add_scalars('client/_metric.goodput_decode', {f'SLO-{slo}': gp for slo, gp in goodput_decode.items()}, 1)
+
+    print('_' * 80)
+    print('TTFT, TPOT, throughput_total, throughput_prefill, throughput_decode, goodput')
+    print(f'{np.mean(prefill_token_latencies):.2f},'
+          f'{np.mean(all_decode_token_latencies):.2f},'
+          f'{throughput[0]:.2f},{throughput[1]:.2f},{throughput[2]:.2f},'
+          + ','.join(f'{v:.2f}' for v in goodput_prefill.values())+','
+          + ','.join(f'{v:.2f}' for v in goodput_decode.values()))
 
 
 if __name__ == '__main__':

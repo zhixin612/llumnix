@@ -29,10 +29,11 @@ import sys
 import glob
 import tensorboardX
 
+from pprint import pprint
 from scipy.stats import zipf
 from enum import Enum
 from transformers import AutoTokenizer
-from typing import List
+from typing import List, Dict, Tuple
 
 random.seed(0xCADE)
 np.random.seed(0xCADE)
@@ -121,7 +122,7 @@ async def query_model_vllm(prompt, verbose, ip_ports):
                 if verbose and 'generated_text' in output:
                     print(json.dumps(output['generated_text']))
                 num_finished_requests += 1
-                print("num_finised_requests: {}".format(num_finished_requests))
+                print("num_finised_requests: {}".format(num_finished_requests), end='\r')
                 return (prompt, prompt_len, output)
         except aiohttp.ClientError as e:
             print(f"Connect to {ip_ports[server_id]} failed with: {str(e)}")
@@ -140,26 +141,29 @@ def get_tok_id_lens(tokenizer, batch):
     return lens
 
 
-def calculate_throughput(queries,
-                         dur_s,
-                         backend,
-                         tokenizer,
-                         median_token_latency,
-                         median_e2e_latency,
-                         median_inference_latency,
-                         all_e2e_latencies,
-                         all_per_token_latencies,
-                         all_inference_latencies,
-                         all_request_ids,
-                         all_decode_token_latencies,
-                         all_request_lens,
-                         log_latencies,
-                         fail_on_response_failure):
+def calculate_throughput(
+        queries,
+        dur_s,
+        backend,
+        tokenizer,
+        median_token_latency,
+        median_e2e_latency,
+        median_inference_latency,
+        all_e2e_latencies,
+        all_per_token_latencies,
+        all_inference_latencies,
+        all_request_ids,
+        all_decode_token_latencies,
+        all_decode_lens,
+        fail_on_response_failure,
+        verbose,
+):
     prompts = []
     responses = []
     expected_response_lens = []
     cf_gen_lens = []
-    for prompt, response in queries:
+
+    for prompt, prompt_len, response in queries:
         if 'generated_text' in response:
             prompts.append(prompt)
             responses.append(response['generated_text'])
@@ -174,7 +178,10 @@ def calculate_throughput(queries,
     # print(f'check_len expect {list(sorted(expected_response_lens))}')
     # print(f'self-reported {list(sorted(cf_gen_lens))}')
     for prompt, response, expected_response_len in zip(prompt_ids, response_ids, expected_response_lens):
-        print(f'check lens {len(prompt)=} {len(response)=} {expected_response_len=}')
+        if len(response) == expected_response_len:
+            print(f'[INFO] check lens {len(prompt)=} {len(response)=} {expected_response_len=}')
+        else:
+            print(f'[WARN] check lens {len(prompt)=} {len(response)=} {expected_response_len=}')
 
     try:
         prompt_lens = get_tok_id_lens(tokenizer, prompts)
@@ -216,24 +223,60 @@ def calculate_throughput(queries,
     msg2 = f'successful_responses {len(responses)} prompt_token_count {prompt_token_count} response_token_count {response_token_count}\n'
     msg3 = f'{median_token_latency=:.04f}, {median_e2e_latency=:.04f}, {median_inference_latency=:.04f}\n'
     msg = msg1 + msg2 + msg3
-    if log_latencies:
-        msg += f'{all_request_lens=}\n{all_request_ids=}\n'
+    if verbose:
+        msg += f'{all_decode_lens=}\n{all_request_ids=}\n'
         msg += f'{all_total_tokens=}\n{all_prompt_lens=}\n{all_response_lens=}\n'
         msg += f'{all_e2e_latencies=}\n{all_per_token_latencies=}\n{all_inference_latencies=}\n{all_waiting_latencies=}\n{all_decode_token_latencies=}\n'
     print(msg)
 
     if fail_on_response_failure:
-        assert len(responses) == len(
-            queries), f"{fail_on_response_failure=}, expected number of successful respones to equal number of queries, got {len(responses)} vs {len(queries)} "
+        assert len(responses) == len(queries), \
+            f"{fail_on_response_failure=}, expected num of responses == number of queries, " \
+            f"got {len(responses)} vs {len(queries)} "
 
     return throughput_tok_s, throughput_prefill, throughput_decode
 
 
-def calculate_cdf(latencies):
-    hist, bin_edges = np.histogram(latencies, bins=50)
+def calculate_goodput(
+        duration_s: float,
+        prefill_latencies: List,
+        decode_latencies: List,
+        prompt_lens: List,
+        prefill_slos: List = None,  # [500, 1000, 2000, 5000]
+        decode_slos: List = None,  # [30, 50, 100, 200]
+) -> Dict:
+    # return {'goodput_prefill_SLO': ABC, ... , 'goodput_decode_SLO': ABC, ...}
+    prefill_slos = [500, 1000, 2000, 5000] if prefill_slos is None else prefill_slos
+    decode_slos = [30, 50, 100, 200] if decode_slos is None else decode_slos
+    prefill_latencies, decode_latencies, prompt_lens = \
+        np.array(prefill_latencies), np.array(decode_latencies), np.array(prompt_lens)
+
+    goodput = {}
+    for slo in prefill_slos:
+        goodput[f'goodput_prefill_{slo}'] = np.sum(prompt_lens[prefill_latencies < slo]) / duration_s
+    for slo in decode_slos:
+        goodput[f'goodput_decode_{slo}'] = np.sum(decode_latencies < slo) / duration_s
+    pprint(goodput)
+    return goodput
+
+
+def cal_lat(latencies):
+    return "[P50, P80, P95, P99, P99.9, mean]: [{:.2f}, {:.2f}, {:.2f}, {:.2f}, {:.2f}, {:.2f}]".format(
+        np.percentile(latencies, 50),
+        np.percentile(latencies, 80),
+        np.percentile(latencies, 95),
+        np.percentile(latencies, 99),
+        np.percentile(latencies, 99.9),
+        np.mean(latencies),
+    )
+
+
+def calculate_cdf(latencies, title='Calculated Latencies'):
+    hist, bin_edges = np.histogram(latencies, bins=10)
     cumsum = np.cumsum(hist)
-    print("Latency: ")
-    print(f"{bin_edges=}")
+    print('-'*80)
+    print(title)
+    print(f"{[f'{x:.2f}' for x in bin_edges]=}")
     print(f"{hist=}")
     print(f"{cumsum=}")
 
@@ -390,7 +433,8 @@ def save_all_decode_token_latencies_npy(all_token_latencies: List[np.ndarray], l
 class MeasureLatency:
     def __init__(self, logdir=None):
         self._request_ids = []
-        self._request_lens = []
+        self._prompt_lens = []
+        self._decode_lens = []
         self._request_latencies = []
         self._per_token_latencies = []
         self._decode_token_latencies = []
@@ -416,21 +460,22 @@ class MeasureLatency:
                 self._request_latencies.append(latency)
                 self.writer.add_scalar('client/request_latency', latency, self.writer_step)
                 try:
-                    self._per_token_latencies.append(
-                        latency / output['response_len'])
-                    # self.writer.add_scalar('client/per_token_latency', latency, self.writer_step)
+                    # Zhixin: Attention here, output['response_len'] != actual response length
+                    self._per_token_latencies.append(latency / output['response_len'])
                 except ZeroDivisionError:
                     pass
             if 'request_id' in output:
                 self._request_ids.append(output['request_id'])
             if 'per_token_latency' in output:
+                self._prompt_lens.append(prompt_len)
                 lat_arr = np.array(output['per_token_latency'])
+                # lat_arr: [(ts_0, lat_0), (ts_1, lat_1), ... , (ts_n, lat_n)]
                 mean_decode_token_latency = 0 if len(lat_arr) == 1 else np.mean(lat_arr[1:, 1])
                 decode_sum_latency = 0 if len(lat_arr) == 1 else np.sum(lat_arr[1:, 1])
                 self.total_decode_latency += decode_sum_latency
                 self.total_decode_tokens += len(lat_arr[1:, 1])
                 # decode
-                self._request_lens.append(len(lat_arr[1:, 1]))  # output length? zhixin
+                self._decode_lens.append(len(lat_arr[1:, 1]))  # decode length
                 self._decode_token_latencies.append(mean_decode_token_latency)
                 self._decode_sum_latencies.append(decode_sum_latency)
                 self._all_decode_token_latencies.extend(lat_arr[1:, 1])
@@ -456,7 +501,7 @@ class MeasureLatency:
                     np.mean(output['per_token_latency_breakdown_dict']['step_latency_engine']))
                 self._per_token_latencies_breakdown_dict.append(output['per_token_latency_breakdown_dict'])
             self.writer_step += 1
-            return prompt, output
+            return prompt, prompt_len, output
 
         return measured
 
@@ -496,7 +541,7 @@ async def benchmark(
 
     if distribution == "burst":
         qps = float('inf')
-    if distribution != "gamma":
+    if distribution != "gamma" and coefficient_variation != 0.0:
         print(f'[WARNING] coefficient_variation is only supported for gamma distribution. Setting it to 0.0.')
         coefficient_variation = 0.0
 
@@ -511,34 +556,49 @@ async def benchmark(
     tasks = []
     async for prompt in async_prompts:
         tasks.append(asyncio.create_task(query_model(prompt, verbose, ip_ports)))
+    # queries from MeasureLatency.measure()
+    # query: (prompt_txt, prompt_len, {req_id, ten_txt, num_token_cf, per_token_lat, breakdown_dict, response_len})
     queries = await asyncio.gather(*tasks)
     dur_s = time.time() - start_time
     median_token_latency = np.median(m._per_token_latencies)
     median_e2e_latency = np.median(m._request_latencies)
     median_inference_latency = np.median(m._inference_latencies)
 
-    throughput = calculate_throughput(queries,
-                                      dur_s,
-                                      backend,
-                                      tokenizer,
-                                      median_token_latency,
-                                      median_e2e_latency,
-                                      median_inference_latency,
-                                      m._request_latencies,
-                                      m._per_token_latencies,
-                                      m._inference_latencies,
-                                      m._request_ids,
-                                      m._decode_token_latencies,
-                                      m._request_lens,
-                                      log_latencies,
-                                      fail_on_response_failure)
-    calculate_cdf(m._request_latencies)
+    throughput = calculate_throughput(
+        queries,
+        dur_s,
+        backend,
+        tokenizer,
+        median_token_latency,
+        median_e2e_latency,
+        median_inference_latency,
+        m._request_latencies,
+        m._per_token_latencies,
+        m._inference_latencies,
+        m._request_ids,
+        m._decode_token_latencies,
+        m._decode_lens,
+        fail_on_response_failure,
+        verbose)
+
+    goodput = calculate_goodput(
+        dur_s,
+        m._prefill_token_latencies,
+        m._all_decode_token_latencies,
+        m._prompt_lens,
+    )
+
+    # calculate_cdf(m._request_latencies)
+    calculate_cdf(m._prefill_token_latencies, 'Prefill Latencies')
+    calculate_cdf(m._decode_token_latencies, 'Decode Latencies')
     plot_latency_cdf(m._request_latencies, m._prefill_token_latencies, m._decode_token_latencies, log_dir)
     save_all_decode_token_latencies_npy(m._all_token_latencies, log_dir)
     # avg_instance_num = plot_instance(log_dir)
     avg_instance_num = 0.0
 
     return throughput, \
+           goodput, \
+           dur_s, \
            m._prefill_token_latencies, \
            m._decode_token_latencies, \
            m._inference_latencies, \
@@ -546,7 +606,7 @@ async def benchmark(
            m._request_latencies, \
            m._request_ids, \
            m._decode_sum_latencies, \
-           m._request_lens, \
+           m._decode_lens, \
            m._all_decode_token_latencies, \
            m._per_token_latencies_breakdown_dict
 
@@ -780,7 +840,7 @@ def main():
     # global config
     backend = GenerationBackend[args.backend]
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, trust_remote_code=args.trust_remote_code)
-    print(tokenizer)
+    # print(tokenizer)
 
     # input preparation
     if args.gen_random_prompts:
@@ -830,17 +890,16 @@ def main():
         print('Exiting...')
         return
 
-    if args.verbose or True:
-        print('prompt lens', sorted(list(prompt_lens)))
-        print('response lens', sorted(list(response_lens)))
-        total_tokens = []
-        for i, (prompt_len, gen_len) in enumerate(zip(prompt_lens, response_lens)):
-            total_tokens.append(prompt_len + gen_len)
-        print('total tokens', sorted(list(total_tokens)))
-
     # prepare and show prompt/response
+    total_tokens = []
+    for i, (prompt_len, gen_len) in enumerate(zip(prompt_lens, response_lens)):
+        total_tokens.append(prompt_len + gen_len)
     plot_len_cdf(prompt_lens, response_lens, total_tokens, args.log_dir)
     prompts = list(zip(prompts, prompt_lens, response_lens))
+    if args.verbose:
+        print('prompt lens', sorted(list(prompt_lens)))
+        print('response lens', sorted(list(response_lens)))
+        print('total tokens', sorted(list(total_tokens)))
 
     # gpu utilization monitor, use subprocess to avoid tokenizer deadlocks
     devices = os.environ.get('CUDA_VISIBLE_DEVICES', None)
@@ -852,6 +911,8 @@ def main():
 
     # run benchmark
     throughput, \
+    goodput, \
+    duration_s, \
     prefill_token_latencies, \
     decode_token_latencies, \
     inference_latencies, \
@@ -881,34 +942,27 @@ def main():
     monitor.join()
 
     # save latency info to json
-    results = []
-    file_name = os.path.join(args.log_dir, "latency_info.json")
-    try:
-        with open(file_name, 'r') as f:
-            results = json.load(f)
-    except json.decoder.JSONDecodeError:
-        pass
-    except FileNotFoundError:
-        os.mknod(file_name)
-
-    # save latency info to json
-    with open(file_name, 'w', encoding='utf-8') as f:
+    with open(os.path.join(args.log_dir, "latency_info.json"), 'w', encoding='utf-8') as f:
         data = {"qps": args.qps,
                 "cv": args.coefficient_variation,
+                "duration": duration_s,
                 "request_ids": request_ids,  # [num_requests]
-                "request_lens": request_lens,  # [num_requests]
+                "prompt_lens": prompt_lens,  # [num_requests]
+                "decode_lens": request_lens,  # [num_requests] -> decode tokens per req
                 "request_latencies": request_latencies,  # [num_requests]
-                "prefill_token_latencies": prefill_token_latencies,  # [num_requests]
-                "decode_token_latencies": decode_token_latencies,  # [num_requests]
-                "decode_sum_latencies": decode_sum_latencies,  # [num_requests]
-                "all_decode_token_latencies": all_decode_token_latencies,  # [SUM(tokens)]
-                "inference_latencies": inference_latencies,  # [num_requests]
+                "prefill_token_latencies": prefill_token_latencies,  # [num_requests] -> TTFT per req
+                "decode_token_latencies": decode_token_latencies,  # [num_requests] -> mean TPOT per req
+                "decode_sum_latencies": decode_sum_latencies,  # [num_requests] -> sum TPOT of all req
+                "all_decode_token_latencies": all_decode_token_latencies,  # [] -> TBT of each token
+                "inference_latencies": inference_latencies,  # [num_requests] -> mean TPOT (engine exec only) per req
                 "per_token_latencies_breakdown_dict": per_token_latencies_breakdown_dict,
                 "throughput": throughput[0],  # tokens/s
                 "throughput_prefill": throughput[1],  # tokens/s
                 "throughput_decode": throughput[2],  # tokens/s
                 "instance_num": avg_instance_num  # gpu/s
                 }
+        data.update(goodput)
+        json.dump(data, f)
         # per_token_latencies_breakdown_dict: [{
         #     'step_latency_engine': [],
         #     'step_postprocess_latency': [],
@@ -919,20 +973,7 @@ def main():
         #     'generate_benchmark_return_output_latency': []
         # }]
 
-        results.append(data)
-        json.dump(results, f)
-
-    # Zhixin: log latency and throughput data to tensorboard
-    def cal_lat(latencies):
-        return "[P50, P80, P95, P99, P99.9, mean]: [{:.2f}, {:.2f}, {:.2f}, {:.2f}, {:.2f}, {:.2f}]".format(
-            np.percentile(latencies, 50),
-            np.percentile(latencies, 80),
-            np.percentile(latencies, 95),
-            np.percentile(latencies, 99),
-            np.percentile(latencies, 99.9),
-            np.mean(latencies),
-        )
-
+    # Zhixin: log latency and throughput data to tensorboard (text)
     workload = {
         'qps': args.qps,
         'cv': args.coefficient_variation,
@@ -941,12 +982,36 @@ def main():
         'random_prompt_count': args.random_prompt_count,
     }
     writer.add_text('metric.workload', '\n'.join([f'{k}: {v}' for k, v in workload.items()]))
-    writer.add_text('metric.throughput', str(throughput[0]))
-    writer.add_text('metric.throughput_prefill', str(throughput[1]))
-    writer.add_text('metric.throughput_decode', str(throughput[2]))
-    writer.add_text('metric.latency_TTFT_ms', cal_lat(prefill_token_latencies))
-    writer.add_text('metric.latency_TBT_ms', cal_lat(decode_token_latencies))
-    writer.add_text('metric.latency_req_sec', cal_lat(request_latencies))
+    writer.add_text('metric.duration_s', str(duration_s))
+    writer.add_text('metric.throughput', f'overall | prefill | decode: '
+                                         f'{throughput[0]: .2f}, {throughput[1]: .2f}, {throughput[2]: .2f}')
+    writer.add_text('metric.latency', f'overall | prefill | decode:  {cal_lat(request_latencies)}, '
+                                      f'{cal_lat(prefill_token_latencies)}, {cal_lat(decode_token_latencies)}')
+    for item, gp in goodput.items():
+        writer.add_text(f'metric.{item}', str(gp))
+
+    # FIXME(Zhixin): wrong goodput calculation (use standalone test py)
+    """
+        "goodput_prefill_500": 5.57714823101328, 
+        "goodput_prefill_1000": 5.664291172122862, 
+        "goodput_prefill_2000": 5.69333881915939, 
+        "goodput_prefill_5000": 5.809529407305499, 
+        "goodput_decode_30": 0.034857176443832995, 
+        "goodput_decode_50": 3.328860350386051, 
+        "goodput_decode_100": 5.565529172198668, 
+        "goodput_decode_200": 5.652672113308251
+    """
+
+    # Zhixin: log latency and throughput data to tensorboard (scalar)
+    writer.add_scalar('client/_metric.throughput', throughput[0], 0)
+    writer.add_scalar('client/_metric.throughput', throughput[0], 1)
+    writer.add_scalar('client/_metric.throughput_prefill', throughput[1], 0)
+    writer.add_scalar('client/_metric.throughput_prefill', throughput[1], 1)
+    writer.add_scalar('client/_metric.throughput_decode', throughput[2], 0)
+    writer.add_scalar('client/_metric.throughput_decode', throughput[2], 1)
+    for item, gp in goodput.items():
+        writer.add_scalar(f'client/_metric.{item}', gp, 0)
+        writer.add_scalar(f'client/_metric.{item}', gp, 1)
 
 
 if __name__ == '__main__':

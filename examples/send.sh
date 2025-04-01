@@ -3,6 +3,8 @@ export MODEL_PATH="/root/share/models/Qwen2.5-7B-Instruct"
 export DATASET_PATH="/root/.cache/huggingface/hub/datasets--shibing624--sharegpt_gpt4/snapshots/3fb53354e02a931777556fb1da37e931d73af48a/sharegpt_gpt4.jsonl"
 export CUDA_VISIBLE_DEVICES=0,1,2,3  # should same to online.sh
 
+echo "[WARNING] Start GPU monitor on devices: $CUDA_VISIBLE_DEVICES"
+
 # request generator:
 #   --max_request_len: int = 8192  (16384 | 32768)
 #   --random_prompt_count: int
@@ -25,19 +27,71 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3  # should same to online.sh
 # name_PD_dataset-size_qps-distri_other_date
 
 
-# dataset benchmark
+###################################################################################################################
+
 python ../benchmark/bench_plus.py \
     --ip_ports "${IP_PORTS[@]}" \
     --tokenizer $MODEL_PATH \
-    --random_prompt_count   1000 \
+    --random_prompt_count   200 \
+    --warmup_request_count  50 \
     --max_request_len       8192 \
-    --dataset_type          "sharegpt" \
-    --dataset_path          $DATASET_PATH \
+    --gen_random_prompts \
+    --random_prompt_lens_distribution "exponential" \
+    --random_prompt_lens_mean  128 \
+    --random_prompt_lens_range 512 \
+    --allow_random_gen_len \
+    --random_response_lens_distribution "exponential" \
+    --random_response_lens_mean  384 \
+    --random_response_lens_range 1024 \
     --qps                   6 \
-    --distribution          "poisson" \
+    --distribution          "uniform" \
     --log_latencies \
     --fail_on_response_failure \
-    --log_dir               "./logs/test/test_0303"
+    --log_dir               "./logs/bench-migration-0331-pred/test"
+#    --log_dir               "./logs/bench-migration-0331-pred/exp-128-512_exp-384-1024_Q6_uni_Q6_1P3D"
+#    --log_dir               "./logs/0327-llumnix-base-benchmark/batch_size_check_1P1D_B1"
+
+
+# random benchmark
+# recommended configs:
+#   (1P3D, Qwen2.5-7B) exp-128-512_uni-384-768_Q6_poi
+#python ../benchmark/bench_plus.py \
+#    --ip_ports "${IP_PORTS[@]}" \
+#    --tokenizer $MODEL_PATH \
+#    --random_prompt_count   1000 \
+#    --max_request_len       8192 \
+#    --gen_random_prompts \
+#    --random_prompt_lens_distribution "exponential" \
+#    --random_prompt_lens_mean  128 \
+#    --random_prompt_lens_range 512 \
+#    --allow_random_gen_len \
+#    --random_response_lens_distribution "uniform" \
+#    --random_response_lens_mean  384 \
+#    --random_response_lens_range 768 \
+#    --qps                   6 \
+#    --distribution          "poisson" \
+#    --log_latencies \
+#    --fail_on_response_failure \
+#    --log_dir               "./logs/debug/increasing_TTFT_exp-128-512_uni-384-768_Q6"
+
+
+# dataset benchmark
+#python ../benchmark/bench_plus.py \
+#    --ip_ports "${IP_PORTS[@]}" \
+#    --tokenizer $MODEL_PATH \
+#    --random_prompt_count   1000 \
+#    --max_request_len       8192 \
+#    --dataset_type          "sharegpt" \
+#    --dataset_path          $DATASET_PATH \
+#    --qps                   6 \
+#    --distribution          "poisson" \
+#    --coefficient_variation  2.0 \
+#    --log_latencies \
+#    --fail_on_response_failure \
+#    --log_dir               "./logs/debug/increasing_TTFT_sharegpt4_poi_Q6"
+#    --log_dir               "./logs/bench-0312-migration/LOAD-mig_pred_used-GPT_1k-Q6_poi-1P3D"
+
+
 
 
 # random benchmark: exponential
@@ -47,16 +101,19 @@ python ../benchmark/bench_plus.py \
 #    --random_prompt_count   1000 \
 #    --max_request_len       8192 \
 #    --gen_random_prompts \
-#    --random_prompt_lens_distribution "exponential" \
-#    --random_prompt_lens_mean  2048 \
-#    --random_prompt_lens_range 4096 \
+#    --random_prompt_lens_distribution "uniform" \
+#    --random_prompt_lens_mean  16 \
+#    --random_prompt_lens_range 16 \
 #    --allow_random_gen_len \
-#    --random_response_lens_distribution "exponential" \
-#    --random_response_lens_mean  2048 \
-#    --random_response_lens_range 4096 \
+#    --random_response_lens_distribution "uniform" \
+#    --random_response_lens_mean  1024 \
+#    --random_response_lens_range 1024 \
 #    --qps                   2 \
-#    --distribution          "gamma" \
+#    --distribution          "poisson" \
 #    --coefficient_variation  2.0 \
 #    --log_latencies \
 #    --fail_on_response_failure \
-#    --log_dir               "./logs/test/test_0303"
+#    --log_dir               "./logs/bench-0312-migration/LOAD-mig_remain-U_16_16-U_1k_1k-Q2_poi"
+#    --log_dir               "./logs/test/test_0318"
+
+

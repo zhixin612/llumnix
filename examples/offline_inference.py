@@ -72,8 +72,8 @@ async def main():
     output_task = asyncio.create_task(background_process_outputs(len(prompts)))
     asyncio.create_task(request_output_queue.run_server_loop())
 
-    for request in prompts:
-        request_id = random_uuid()
+    for i, request in enumerate(prompts):
+        request_id = f'req-{i}'
         await manager.generate.remote(request_id=request_id,
                                       server_info=server_info,
                                       prompt=request,

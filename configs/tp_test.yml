@@ -1,0 +1,58 @@
+# -----------------------------------------------------------------------------
+# SERVER CONFIGURATION
+# -----------------------------------------------------------------------------
+SERVER:
+  HOST: "localhost"
+  PORT: 18000
+  REQUEST_OUTPUT_QUEUE_PORT: 1234
+  LOG_REQUEST_TIMESTAMPS: True  # Zhixin
+  LAUNCH_RAY_CLUSTER: True  # Zhixin
+
+# -----------------------------------------------------------------------------
+# MANAGER CONFIGURATION
+# -----------------------------------------------------------------------------
+MANAGER:
+  # Time interval(s) to update instance info and pair migration
+  POLLING_INTERVAL: 0.05
+  LOG_INSTANCE_INFO: True  # Zhixin: board will be enabled only when this is True
+  # test_1P3D_sharegpt-1k_qps6-poi_0219
+  # bench-0225/dispatch-rr_1P3D_SGPT1k_Q6_0228
+  LOG_FILENAME: "/root/llm/disagg/llumnix/examples/logs/test/tp_test"
+  ENABLE_TENSORBOARD: True
+
+  INITIAL_INSTANCES: 1  # Zhixin
+  ENABLE_PD_DISAGG: True  # Zhixin
+  PD_RATIO: "1:1"
+
+  # -------------------------- DISPATCH CONFIGURATION ---------------------------
+  DISPATCH_POLICY: 'queue'  # balanced, load, queue, flood, rr (Default=load)
+
+  # -------------------------- MIGRATION CONFIGURATION --------------------------
+  ENABLE_MIGRATION: True  # Zhixin
+  PAIR_MIGRATION_FREQUENCY: 1
+  PAIR_MIGRATION_POLICY: 'defrag_constrained'
+  MIGRATE_OUT_THRESHOLD: -3.0
+
+
+# -----------------------------------------------------------------------------
+# INSTANCE CONFIGURATION
+# -----------------------------------------------------------------------------
+INSTANCE:
+  # ------------------------- LOAD METRICS CONFIGURATION ------------------------
+  DISPATCH_LOAD_METRIC: 'remaining_steps'
+  MIGRATION_LOAD_METRIC: 'remaining_steps'
+
+  # -------------------------- MIGRATION CONFIGURATION --------------------------
+  # Enable defragmentation through migration based on virtual usage
+  ENABLE_DEFRAG: True  # Zhixin
+  # Request migration policy
+  REQUEST_MIGRATION_POLICY: 'SR'
+  # Drop migration if the number of stages > migration_max_stages
+  MIGRATION_MAX_STAGES: 3
+  # If the number of remain blocks < migration_last_stage_max_blocks, do last stage migration
+  MIGRATION_LAST_STAGE_MAX_BLOCKS: 16
+  MIGRATION_BACKEND: "gloo"
+  # Number of cache blocks in migration
+  MIGRATION_BUFFER_BLOCKS: 512
+  # Number of kv-cache layers to transfer in each round during migration
+  MIGRATION_NUM_LAYERS: 1

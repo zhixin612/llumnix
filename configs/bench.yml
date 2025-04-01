@@ -7,6 +7,7 @@ SERVER:
   REQUEST_OUTPUT_QUEUE_PORT: 1234
   LOG_REQUEST_TIMESTAMPS: True  # Zhixin
   LAUNCH_RAY_CLUSTER: True  # Zhixin
+  LOG_LEVEL: "warning"
 
 # -----------------------------------------------------------------------------
 # MANAGER CONFIGURATION
@@ -15,9 +16,7 @@ MANAGER:
   # Time interval(s) to update instance info and pair migration
   POLLING_INTERVAL: 0.05
   LOG_INSTANCE_INFO: True  # Zhixin: board will be enabled only when this is True
-  # test_1P3D_sharegpt-1k_qps6-poi_0219
-  # bench-0225/dispatch-rr_1P3D_SGPT1k_Q6_0228
-  LOG_FILENAME: "/root/llm/disagg/llumnix/examples/logs/test/test_0303"
+  LOG_FILENAME: "/root/llm/disagg/llumnix/examples/logs/bench-migration-0331-pred/test"
   ENABLE_TENSORBOARD: True
 
   INITIAL_INSTANCES: 1  # Zhixin
@@ -25,11 +24,12 @@ MANAGER:
   PD_RATIO: "1:3"
 
   # -------------------------- DISPATCH CONFIGURATION ---------------------------
-  DISPATCH_POLICY: 'rr'  # balanced, load, queue, flood, rr (Default=load)
+  # Zhixin: [Attention] dispatch policy and metric decide the PREFILL instance instead of DECODE instance
+  DISPATCH_POLICY: 'load'  # balanced, load, queue, flood, rr (Default=load)
 
   # -------------------------- MIGRATION CONFIGURATION --------------------------
   ENABLE_MIGRATION: True  # Zhixin
-  PAIR_MIGRATION_FREQUENCY: 1
+  PAIR_MIGRATION_FREQUENCY: 1  # * POLLING_INTERVAL
   PAIR_MIGRATION_POLICY: 'defrag_constrained'
   MIGRATE_OUT_THRESHOLD: -3.0
 
@@ -39,8 +39,9 @@ MANAGER:
 # -----------------------------------------------------------------------------
 INSTANCE:
   # ------------------------- LOAD METRICS CONFIGURATION ------------------------
+  # Zhixin: [Attention] dispatch policy and metric decide the PREFILL instance instead of DECODE instance
   DISPATCH_LOAD_METRIC: 'remaining_steps'
-  MIGRATION_LOAD_METRIC: 'remaining_steps'
+  MIGRATION_LOAD_METRIC: 'remaining_steps'   # remaining_steps, predicted_remaining_blocks, predicted_used_blocks
 
   # -------------------------- MIGRATION CONFIGURATION --------------------------
   # Enable defragmentation through migration based on virtual usage

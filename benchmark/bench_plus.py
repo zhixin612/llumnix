@@ -87,6 +87,40 @@ class GenerationBackend(str, Enum):
     FasterTransformer = "FasterTransformer"
 
 
+async def query_model_vllm_warm(prompt, verbose, ip_ports):
+    prompt, prompt_len, expected_response_len = prompt
+
+    # Evenly dispatch request to the given api servers.
+    global server_num_requests
+    server_id = min(server_num_requests, key=server_num_requests.get)
+    server_num_requests[server_id] += 1
+    timeout = aiohttp.ClientTimeout(total=4 * 60 * 60)
+
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        best_of = 1
+        output_len = expected_response_len
+        request_dict = {
+            "prompt": prompt,
+            "n": 1,
+            "best_of": best_of,
+            "temperature": 1.0,
+            "top_k": 1,
+            "max_tokens": max(output_len, 1),
+            "ignore_eos": True,
+            "stream": False,
+            # Zhixin: [PRED] used for output length prediction (It should be obtained at manager in the final version).
+            "predicted_len": max(output_len, 1),
+        }
+        if verbose:
+            print('Querying model')
+        try:
+            async with session.post(f'http://{ip_ports[server_id]}/generate_benchmark', json=request_dict):
+                pass
+        except aiohttp.ClientError as e:
+            print(f"Connect to {ip_ports[server_id]} failed with: {str(e)}")
+            sys.exit(1)
+
+
 async def query_model_vllm(prompt, verbose, ip_ports):
     prompt, prompt_len, expected_response_len = prompt
 
@@ -109,6 +143,8 @@ async def query_model_vllm(prompt, verbose, ip_ports):
             "max_tokens": max(output_len, 1),
             "ignore_eos": True,
             "stream": False,
+            # Zhixin: [PRED] used for output length prediction (It should be obtained at manager in the final version).
+            "predicted_len": max(output_len, 1),
         }
         if verbose:
             print('Querying model')
@@ -472,7 +508,7 @@ class MeasureLatency:
             if 'per_token_latency' in output:
                 self._prompt_lens.append(prompt_len)
                 lat_arr = np.array(output['per_token_latency'])
-                # lat_arr: [(ts_0, lat_0), (ts_1, lat_1), ... , (ts_n, lat_n)]
+                # lat_arr: [(ts_0, lat_0), (ts_1, lat_1), ... , (ts_n, lat_n)]  [time.time(), ms]
                 mean_decode_token_latency = 0 if len(lat_arr) == 1 else np.mean(lat_arr[1:, 1])
                 decode_sum_latency = 0 if len(lat_arr) == 1 else np.sum(lat_arr[1:, 1])
                 self.total_decode_latency += decode_sum_latency
@@ -503,6 +539,8 @@ class MeasureLatency:
                 self._inference_latencies.append(
                     np.mean(output['per_token_latency_breakdown_dict']['step_latency_engine']))
                 self._per_token_latencies_breakdown_dict.append(output['per_token_latency_breakdown_dict'])
+                self.writer.add_scalar('client/engine_prefill_ms', output['per_token_latency_breakdown_dict']['step_latency_engine'][0], self.writer_step)
+                self.writer.add_scalar('client/engine_decode_ms', np.mean(output['per_token_latency_breakdown_dict']['step_latency_engine'][1:]), self.writer_step)
             self.writer_step += 1
             return prompt, prompt_len, output
 
@@ -517,7 +555,8 @@ def get_token_ids(input_str, tokenizer):
 async def benchmark(
         backend: GenerationBackend,
         tokenizer,
-        prompts: List[str],
+        dataset: List[Tuple],
+        dataset_warmup: List[Tuple],
         allow_random_gen_len: bool,
         verbose: bool,
         log_dir: str,
@@ -530,6 +569,7 @@ async def benchmark(
 ):
     if backend == GenerationBackend.vLLM:
         query_model = query_model_vllm
+        query_model_warm = query_model_vllm_warm
     else:
         raise ValueError(f'unknown backend {backend}')
 
@@ -548,16 +588,28 @@ async def benchmark(
         print(f'[WARNING] coefficient_variation is only supported for gamma distribution. Setting it to 0.0.')
         coefficient_variation = 0.0
 
-    print(
-        f'Starting with backend={backend}, num_prompts={len(prompts)}, allow_random_gen_length={allow_random_gen_len}')
+    if len(dataset_warmup) > 0:
+        print('-' * 80)
+        print(f'start warmup, num_warmup_request={len(dataset_warmup)}')
+        async_dataset_warm = async_request_gen(
+            iter(dataset_warmup), qps=qps, distribution=distribution, coefficient_variation=coefficient_variation)
+        task_warm, cnt = [], 0
+        async for prompt in async_dataset_warm:
+            cnt+=1
+            print(f'warmup {cnt}/{len(dataset_warmup)}', end='\r')
+            task_warm.append(asyncio.create_task(query_model_warm(prompt, verbose, ip_ports)))
+        print('\nwarmup done')
+
+    print('-' * 80)
+    print(f'backend={backend}, num_prompts={len(dataset)}, allow_random_gen_length={allow_random_gen_len}')
     print(f'traffic distribution={distribution}, qps={qps}, coefficient_variation={coefficient_variation}')
 
-    async_prompts = async_request_gen(
-        iter(prompts), qps=qps, distribution=distribution, coefficient_variation=coefficient_variation)
+    async_dataset = async_request_gen(
+        iter(dataset), qps=qps, distribution=distribution, coefficient_variation=coefficient_variation)
 
     start_time = time.time()
     tasks = []
-    async for prompt in async_prompts:
+    async for prompt in async_dataset:
         tasks.append(asyncio.create_task(query_model(prompt, verbose, ip_ports)))
     # queries from MeasureLatency.measure()
     # query: (prompt_txt, prompt_len, {req_id, ten_txt, num_token_cf, per_token_lat, breakdown_dict, response_len})
@@ -620,7 +672,7 @@ def gen_random_lens(distribution: str, len_mean, len_range, num_prompts):
         if len_range == 0:
             return [len_mean for _ in range(num_prompts)]
 
-        low = len_mean - (len_range // 2)
+        low = max(len_mean - (len_range // 2), 1)
         high = len_mean + (len_range // 2)
         response_lens = list(
             map(lambda _: random.randint(low, high), range(num_prompts)))
@@ -666,6 +718,7 @@ def gen_random_lens(distribution: str, len_mean, len_range, num_prompts):
         response_lens = capped_response_lens
     else:
         response_lens = [response_len if response_len <= len_range else len_range for response_len in response_lens]
+        response_lens = [1 if response_len <= 0 else response_len for response_len in response_lens]
     response_lens = [int(x) for x in response_lens]
 
     return response_lens
@@ -798,6 +851,7 @@ def main():
 
     # input config
     parser.add_argument('--random_prompt_count', type=int)
+    parser.add_argument('--warmup_request_count', type=int, default=0)
     parser.add_argument('--max_request_len', type=int, default=8192)
 
     # input config: random prompt
@@ -844,25 +898,25 @@ def main():
     # global config
     backend = GenerationBackend[args.backend]
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, trust_remote_code=args.trust_remote_code)
-    # print(tokenizer)
+    print(tokenizer)
 
     # input preparation
     if args.gen_random_prompts:
         assert args.random_prompt_count is not None
     if args.dataset_type:
         if args.dataset_type == "sharegpt":
-            prompts, prompt_lens, response_lens = sample_sharegpt_requests(args.dataset_path, args.random_prompt_count,
-                                                                           tokenizer, args.max_request_len)
+            prompts, prompt_lens, response_lens = sample_sharegpt_requests(
+                args.dataset_path, args.random_prompt_count + args.warmup_request_count, tokenizer, args.max_request_len)
         elif args.dataset_type == "burstgpt":
-            prompts, prompt_lens, response_lens = sample_burstgpt_request(args.dataset_path, args.random_prompt_count,
-                                                                          tokenizer, args.max_request_len)
+            prompts, prompt_lens, response_lens = sample_burstgpt_request(
+                args.dataset_path, args.random_prompt_count + args.warmup_request_count, tokenizer, args.max_request_len)
         elif args.dataset_type == "arxiv":
-            prompts, prompt_lens, response_lens = sample_arxiv_request(args.dataset_path, args.random_prompt_count,
-                                                                       tokenizer, args.max_request_len)
+            prompts, prompt_lens, response_lens = sample_arxiv_request(
+                args.dataset_path, args.random_prompt_count + args.warmup_request_count, tokenizer, args.max_request_len)
         num_prompts = len(prompts)
     elif args.gen_random_prompts:
         # TODO(Zhixin): This step may be very slow, consider save the prompts to files in advance.
-        num_prompts = args.random_prompt_count
+        num_prompts = args.random_prompt_count + args.warmup_request_count
         prompts, prompt_lens = gen_random_prompts_return_lens(
             tokenizer,
             distribution=args.random_prompt_lens_distribution,
@@ -894,13 +948,21 @@ def main():
         print('Exiting...')
         return
 
+    # split warmup and running data
+    num_warmup = args.warmup_request_count
+    dataset_warmup = list(zip(prompts[:num_warmup], prompt_lens[:num_warmup], response_lens[:num_warmup]))
+    dataset = list(zip(prompts[num_warmup:], prompt_lens[num_warmup:], response_lens[num_warmup:]))
+
+    prompts = prompts[num_warmup:]
+    prompt_lens = prompt_lens[num_warmup:]
+    response_lens = response_lens[num_warmup:]
+
     # prepare and show prompt/response
     total_tokens = []
     for i, (prompt_len, gen_len) in enumerate(zip(prompt_lens, response_lens)):
         total_tokens.append(prompt_len + gen_len)
     plot_len_cdf(prompt_lens, response_lens, total_tokens, args.log_dir)
-    prompts = list(zip(prompts, prompt_lens, response_lens))
-    if args.verbose:
+    if args.verbose or True:
         print('prompt lens', sorted(list(prompt_lens)))
         print('response lens', sorted(list(response_lens)))
         print('total tokens', sorted(list(total_tokens)))
@@ -930,7 +992,8 @@ def main():
     per_token_latencies_breakdown_dict = asyncio.run(benchmark(
         backend,
         tokenizer,
-        prompts,
+        dataset,
+        dataset_warmup,
         args.allow_random_gen_len,
         args.verbose,
         args.log_dir,
@@ -1004,6 +1067,8 @@ def main():
           f'{throughput[0]:.2f},{throughput[1]:.2f},{throughput[2]:.2f},'
           + ','.join(f'{v:.2f}' for v in goodput_prefill.values())+','
           + ','.join(f'{v:.2f}' for v in goodput_decode.values()))
+    print('_' * 80)
+    print('ALL LOG FILES ARE SAVED TO:', args.log_dir)
 
 
 if __name__ == '__main__':

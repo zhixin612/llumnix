@@ -27,6 +27,7 @@ class LocalMigrationScheduler:
         # Requests meet the strict pre-migration always have higher prioirity than other migration policy.
         migrate_out_requests: List[LlumnixRequest] = self.get_required_migration_request()
         if len(migrate_out_requests) == 0:
+            # print('[WARN] llumnix.llumnix.llumlet.local_migration_scheduler#30 Zhixin: migrate running request!!!')
             if self.request_migration_policy == 'LCR':
                 migrate_out_requests = self._get_last_running_request(min_request_len, max_request_len)
             elif self.request_migration_policy == 'LR':

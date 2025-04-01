@@ -45,7 +45,7 @@ class LlumnixClientVLLM:
                        **kwargs) -> AsyncStream:
         if sampling_params.n > 1:
             raise ValueError("Unsupported feature: multiple sequence decoding")
-        logger.info("entrypoints receive request {}".format(request_id))
+        logger.debug("entrypoints receive request {}".format(request_id))
         # pylint: disable=unexpected-keyword-arg
         results_generator = AsyncStream(request_id, cancel=self.abort_request)
         self.request_streams[request_id] = results_generator

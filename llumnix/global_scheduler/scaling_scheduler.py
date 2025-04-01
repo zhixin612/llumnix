@@ -88,6 +88,7 @@ class ScalingScheduler:
         dummy_intance_info.num_available_gpu_blocks = np.inf
         dummy_intance_info.num_free_gpu_blocks = np.inf
         dummy_intance_info.num_available_gpu_blocks_waiting = np.inf
+        dummy_intance_info.num_preserved_blocks = np.inf
         return dummy_intance_info
 
 class ScalePolicy(ABC):
@@ -111,6 +112,7 @@ class ScalePolicy(ABC):
         tot_instance_info.num_free_gpu_blocks = sum([i.num_free_gpu_blocks for i in instance_infos])
         tot_instance_info.num_total_gpu_blocks = sum([i.num_total_gpu_blocks for i in instance_infos])
         tot_instance_info.num_watermark_blocks = sum([i.num_watermark_blocks for i in instance_infos])
+        tot_instance_info.num_preserved_blocks = sum([i.num_preserved_blocks for i in instance_infos])
         tot_instance_info.num_blocks_all_waiting_requests = sum([i.num_blocks_all_waiting_requests for i in instance_infos])
         tot_instance_info.num_available_gpu_blocks = tot_instance_info.num_free_gpu_blocks - tot_instance_info.num_watermark_blocks
         return self.scaling_load_calculator.compute_instance_load(tot_instance_info)
@@ -148,6 +150,7 @@ class AvgLoad(ScalePolicy):
                                                     for i in instance_infos])
         tot_instance_info.num_watermark_blocks = sum([0 if i.instance_id + 1 == num_instances else i.num_watermark_blocks
                                                     for i in instance_infos])
+        tot_instance_info.num_preserved_blocks = sum([i.num_preserved_blocks for i in instance_infos])
         tot_instance_info.num_blocks_all_waiting_requests = sum([i.num_blocks_all_waiting_requests for i in instance_infos])
         tot_instance_info.num_available_gpu_blocks = tot_instance_info.num_free_gpu_blocks - tot_instance_info.num_watermark_blocks
         return self.scaling_load_calculator.compute_instance_load(tot_instance_info)

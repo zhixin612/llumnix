@@ -169,7 +169,7 @@ class Llumlet:
             t0 = time.time()
             migrate_in_ray_actor = ray.get_actor(dst_instance_name, namespace='llumnix')
             dst_instance_id = dst_instance_name[len("instance_"):]
-            logger.info("{}->{} begin migrate out".format(self.instance_id, dst_instance_id))
+            logger.debug("{}->{} begin migrate out".format(self.instance_id, dst_instance_id))
             migrated_request, migrated_blocks = [], 0
 
             if migrate_out_request.status == RequestStatus.RUNNING:
@@ -195,8 +195,8 @@ class Llumlet:
                 if status == MigrationStatus.ABORTED_SRC:
                     await migrate_in_ray_actor.execute_migration_method.remote("free_dst_pre_alloc_cache", migrate_out_request.request_id)
             t1 = time.time()
-            logger.info("{}->{} migrate done, migrate request {}, migration status: {}, len: {} blocks, cost: {} ms" \
-                        .format(self.instance_id, dst_instance_id, migrated_request, status, \
+            logger.info("{}->{} migrate done, reqs: {}, status: {}, blocks: {}, cost: {:.2f} ms" \
+                        .format(self.instance_id_str, dst_instance_id, migrated_request, status, \
                                 sum(migrate_out_request.stage_num_blocks_list), (t1 - t0)*1000))
         except ray.exceptions.RayActorError:
             logger.info("Instance {} is dead.".format(dst_instance_name[len("instance_"):]))
@@ -211,7 +211,7 @@ class Llumlet:
     # TODO(KuilongCui): only the metrics-related information needs to be synchronously loaded for the manager
     def get_instance_info(self) -> InstanceInfo:
         instance_info: InstanceInfo = self.backend_engine.engine.instance_info
-        instance_info.instance_id_str = self.instance_id_str  # ZhiXin: add instance_id_str for tensorboard
+        instance_info.instance_id_str = self.instance_id_str
         instance_info.instance_type = self.instance_args.instance_type
         self.instance_load_calculator.compute_instance_load(instance_info)
         return instance_info

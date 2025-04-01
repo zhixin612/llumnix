@@ -250,14 +250,19 @@ class LLMEngineLlumnix(_AsyncLLMEngine):
         self.instance_info = instance_info
 
     def add_request(self, request_id: str, server_info: ServerInfo, expected_steps: int, *args, **kwargs):
+
+        # Zhixin: [PRED] get predicted output length here
+        predicted_len = kwargs.pop('predicted_len', None)
+
         super().add_request(request_id, *args, **kwargs)
         seq_group = self.scheduler[0].waiting[-1]
         if hasattr(server_info, 'request_timestamps'):
             server_info.request_timestamps.engine_add_request_timestamp = time.time()
-        self.scheduler[0].waiting[-1] = SequenceGroupLlumnix(request_id, server_info, expected_steps, [seq_group.get_seqs()[0]],
-                                                          seq_group.metrics.arrival_time, seq_group.sampling_params, seq_group.lora_request,
-                                                          seq_group.trace_headers, seq_group.prompt_adapter_request, seq_group.encoder_seq,
-                                                          seq_group.priority)
+        self.scheduler[0].waiting[-1] = SequenceGroupLlumnix(
+            request_id, server_info, expected_steps, predicted_len,
+            [seq_group.get_seqs()[0]], seq_group.metrics.arrival_time, seq_group.sampling_params,
+            seq_group.lora_request, seq_group.trace_headers, seq_group.prompt_adapter_request,
+            seq_group.encoder_seq, seq_group.priority)
 
     def _start_put_queue_loop(self):
         while True:
@@ -356,7 +361,7 @@ class BackendVLLM(BackendInterface):
     def commit_dst_request(self, backend_request: SequenceGroupLlumnix) -> None:
         seq = backend_request.get_seqs()[0]
         seq.seq_id = next(self.engine.seq_counter)
-        logger.info("pop request {} from pre_alloc_cache_dict".format(backend_request.request_id))
+        logger.debug("pop request {} from pre_alloc_cache_dict".format(backend_request.request_id))
         pre_alloc_blocks = self.engine.scheduler[0].pre_alloc_cache_dict.pop(backend_request.request_id)
         self.engine.scheduler[0].block_manager.add_block_table(pre_alloc_blocks, seq.seq_id)
         backend_request.reset_migration_args_dst()

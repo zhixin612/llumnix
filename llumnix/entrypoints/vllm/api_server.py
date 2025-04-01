@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 import time
 import asyncio
 import json
+import itertools
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 import uvicorn
@@ -38,6 +39,7 @@ from llumnix.constants import SERVER_TIMEOUT_KEEP_ALIVE
 logger = init_logger("llumnix.entrypoints.vllm.api_server")
 
 llumnix_client: LlumnixClientVLLM = None
+request_counter = itertools.count(1)
 
 
 # pylint: disable=unused-argument
@@ -70,7 +72,8 @@ async def generate(request: Request) -> Response:
     prompt = request_dict.pop("prompt")
     stream = request_dict.pop("stream", False)
     sampling_params = SamplingParams(**request_dict)
-    request_id = random_uuid()
+    # request_id = random_uuid()
+    request_id = f'req-{next(request_counter)}'
 
     # Use LlumnixClientVLLM's generate and abort api to replace with vLLM AsyncLLMEngine's generate and abort api.
     results_generator = await llumnix_client.generate(prompt, sampling_params, request_id)
@@ -115,13 +118,17 @@ async def generate_benchmark(request: Request) -> Response:
     # Add some benchmark-related codes comparing to the generate API.
     request_dict = await request.json()
     prompt = request_dict.pop("prompt")
+
+    # Zhixin: [PRED] get predicted output length
+    predicted_len = request_dict.pop("predicted_len", 0)
+
     _ = request_dict.pop("stream", False)
     sampling_params = SamplingParams(**request_dict)
-    request_id = random_uuid()
+    request_id = f'req-{next(request_counter)}'
 
     start = time.time()
 
-    results_generator = await llumnix_client.generate(prompt, sampling_params, request_id)
+    results_generator = await llumnix_client.generate(prompt, sampling_params, request_id, predicted_len=predicted_len)
 
     # Non-streaming case
     final_output = None
@@ -143,8 +150,8 @@ async def generate_benchmark(request: Request) -> Response:
 
     if llumnix_client.log_requests:
         llumnix_client.num_finished_requests += 1
-        logger.info("entrypoints finished request {}".format(request_id))
-        logger.info("num_finished_requests {}".format(llumnix_client.num_finished_requests))
+        logger.debug(f"finished request {request_id} (total = {llumnix_client.num_finished_requests})")
+        # logger.info("num_finished_requests {}".format(llumnix_client.num_finished_requests))
 
     generation = final_output.outputs[0].text
     num_output_tokens = len(final_output.outputs[0].token_ids)

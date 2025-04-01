@@ -57,6 +57,9 @@ class InstanceInfo:
     num_blocks_all_waiting_requests: int = 0
     num_blocks_last_running_request: int = 0
 
+    # Zhixin: [PRED] num_preserved_blocks used for predicted but not yet generated tokens
+    num_preserved_blocks: int = 0
+
     # on-demand init infos
     dispatch_load_metric: float = -np.inf
     migration_load_metric: float = np.inf
@@ -77,8 +80,8 @@ class InstanceInfo:
 
 class InstanceLoadCalculator:
     def __init__(self, dispatch_load_metric: str, migration_load_metric: str, enable_defrag: bool) -> None:
-        self.dispatch_load_calculator = DispatchLoadComputation(migration_load_metric)
-        self.migration_load_calculator = MigrationLoadComputation(dispatch_load_metric, enable_defrag)
+        self.dispatch_load_calculator = DispatchLoadComputation(dispatch_load_metric)
+        self.migration_load_calculator = MigrationLoadComputation(migration_load_metric, enable_defrag)
 
     def compute_instance_load(self, instance_info: InstanceInfo):
         instance_info.dispatch_load_metric = self.dispatch_load_calculator.compute_instance_load(instance_info)
@@ -112,6 +115,20 @@ class DispatchLoadComputation(LoadComputationStrategy):
                 # return -np.inf
                 return num_available_gpu_blocks * -2  # ZhiXin: change to return the number of available blocks
             instance_load = (num_available_gpu_blocks / num_requests) * (-1)
+        elif self.load_metric == 'predicted_remaining_blocks':
+            raise ValueError('predicted_remaining_blocks should not be used for dispatch load computation.')
+            num_requests = instance_info.num_running_requests + instance_info.num_waiting_requests
+            num_available_gpu_blocks = instance_info.num_available_gpu_blocks - instance_info.num_blocks_all_waiting_requests
+            # Zhixin: only decode instances have valid num_preserved_blocks
+            if instance_info.instance_type == InstanceType.DECODE:
+                num_available_gpu_blocks -= instance_info.num_preserved_blocks
+            if num_requests == 0:
+                return num_available_gpu_blocks * -2
+            instance_load = num_available_gpu_blocks * -1
+
+            temp = (instance_info.num_available_gpu_blocks - instance_info.num_blocks_all_waiting_requests) \
+                   / num_requests * (-1)
+            logger.warning(f'[LOAD] predicted_remaining_blocks vs remaining_steps: {instance_load} | {temp}')
         else:
             logger.error(f"Invalid dispatch load metric: {self.load_metric}")
         return instance_load
@@ -124,6 +141,7 @@ class MigrationLoadComputation(LoadComputationStrategy):
 
         if is_migrate_in:
             instance_info_after_migrate.num_running_requests += 1
+            # TODO(Zhixin): Why minus num_blocks_last_running_request?
             instance_info_after_migrate.num_available_gpu_blocks -= num_blocks_last_running_request
         else:
             instance_info_after_migrate.num_running_requests -= 1
@@ -150,6 +168,34 @@ class MigrationLoadComputation(LoadComputationStrategy):
                 # return -np.inf
                 return num_available_gpu_blocks * -2  # ZhiXin: change to return the number of available blocks
             instance_load = (num_available_gpu_blocks / num_requests) * (-1)
+        elif self.load_metric == 'predicted_remaining_blocks':
+            if instance_info.instance_type not in [InstanceType.DECODE, InstanceType.NO_CONSTRAINTS]:
+                logger.error(f'predicted_remaining_blocks is not supported for {instance_info.instance_type}')
+
+            if not self.enable_defrag:
+                raise ValueError('predicted_remaining_blocks is not supported without defrag')
+            else:
+                num_requests = instance_info.num_running_requests + instance_info.num_waiting_requests
+                if num_requests == 0:
+                    return instance_info.num_available_gpu_blocks * -2
+                num_available_gpu_blocks = instance_info.num_available_gpu_blocks - \
+                                           instance_info.num_blocks_all_waiting_requests
+                if instance_info.instance_type == InstanceType.DECODE:
+                    logger.warning(
+                        f'init num_available_gpu_blocks: {num_available_gpu_blocks}  |  new num_available_gpu_blocks: {num_available_gpu_blocks - instance_info.num_preserved_blocks}')
+                    num_available_gpu_blocks -= instance_info.num_preserved_blocks
+
+            instance_load = num_available_gpu_blocks * (-1)
+        elif self.load_metric == 'predicted_used_blocks':
+            if not self.enable_defrag:
+                raise ValueError('predicted_used_blocks is not supported without defrag')
+            # Fixme(Zhixin): "used_blocks" should be a percentage instead of an absolute number
+            instance_load = instance_info.num_used_gpu_blocks + instance_info.num_preserved_blocks
+
+
+        # TODO(Zhixin): add compute load metric here!!!!!!!!!!!
+
+
         else:
             logger.error(f"Invalid migration load metric: {self.load_metric}")
         return instance_load

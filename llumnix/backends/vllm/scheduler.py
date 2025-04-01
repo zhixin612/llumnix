@@ -13,7 +13,7 @@
 
 import time
 import bisect
-from typing import Dict, List, Optional, Tuple, Deque
+from typing import Dict, List, Optional, Tuple, Deque, cast
 from collections import deque
 
 from vllm.utils import Device
@@ -51,9 +51,15 @@ class BlockManagerLlumnix(SelfAttnBlockSpaceManager):
         self._computed_blocks_tracker.add_seq(seq_id)
         self._last_access_blocks_tracker.add_seq(seq_id)
 
+
 class SchedulerLlumnix(Scheduler):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
+        # Zhixin: explicitly redefine the type of running, waiting, and swapped
+        self.waiting = cast(Deque[SequenceGroupLlumnix], deque())
+        self.running = cast(Deque[SequenceGroupLlumnix], deque())
+        self.swapped = cast(Deque[SequenceGroupLlumnix], deque())
+
         self.block_manager = BlockManagerLlumnix(
             block_size=self.cache_config.block_size,
             num_gpu_blocks=self.cache_config.num_gpu_blocks,
@@ -96,7 +102,8 @@ class SchedulerLlumnix(Scheduler):
                 request_ids.append(seq_group.request_id)
         return request_ids
 
-    def get_request_incremental_blocks(self, backend_request: LlumnixRequest, pre_stage_num_blocks: int) -> Tuple[List[int], List[int]]:
+    def get_request_incremental_blocks(self, backend_request: SequenceGroupLlumnix, pre_stage_num_blocks: int) -> Tuple[List[int], List[int]]:
+        # Zhixin: backend_request is a LlumnixSequenceGroup object
         seq = backend_request.get_seqs()[0]
         blocks = self.block_manager.get_block_table(seq)
         block_table = self.block_manager.block_tables[seq.seq_id]
@@ -154,11 +161,11 @@ class SchedulerLlumnix(Scheduler):
 
         return block_table.physical_block_ids[-block_num:]
 
-    def add_running_request(self, backend_request: LlumnixRequest) -> None:
+    def add_running_request(self, backend_request: SequenceGroupLlumnix) -> None:
         self._set_status(backend_request, status_to=SequenceStatus.RUNNING)
         self.running.append(backend_request)
 
-    def add_waiting_request(self, backend_request: LlumnixRequest) -> None:
+    def add_waiting_request(self, backend_request: SequenceGroupLlumnix) -> None:
         self._set_status(backend_request, status_to=SequenceStatus.WAITING)
         # pylint: disable=E0203
         arrival_time_list = [request.arrival_time for request in self.waiting]
@@ -168,12 +175,12 @@ class SchedulerLlumnix(Scheduler):
         else:
             self.waiting.append(backend_request)
 
-    def can_allocate(self, seq_group: SequenceGroup) -> AllocStatus:
+    def can_allocate(self, seq_group: SequenceGroupLlumnix) -> AllocStatus:
         if seq_group.status == RequestStatus.WAITING_MIGRATING:
             return AllocStatus.OK
         return super().can_allocate(seq_group)
 
-    def _allocate_and_set_running(self, seq_group: SequenceGroup) -> None:
+    def _allocate_and_set_running(self, seq_group: SequenceGroupLlumnix) -> None:
         # Change seq status to running, but request status is still waiting_migrating.
         if seq_group.status == RequestStatus.WAITING_MIGRATING:
             # For the waiting request migrated in, blocks have already been allocated when pre alloc.
@@ -207,8 +214,18 @@ class SchedulerLlumnix(Scheduler):
 
     def free_src_request(self, backend_request: SequenceGroupLlumnix) -> None:
         seq = backend_request.get_seqs()[0]
-        logger.info("free request: {} (seq: {})".format(backend_request.request_id, seq.seq_id))
+        logger.debug("free request: {} (seq: {})".format(backend_request.request_id, seq.seq_id))
         self.free_seq(seq)
+
+    def _get_preserved_blocks(self) -> int:
+        # Zhixin: [PRED] get predicted remaining output length
+        # TODO(Zhixin): this function may cause performance issue, need to optimize (maintain a global variable)
+        predicted_remaining_output_len = 0
+        for seq_group in self.running:
+            predicted_remaining_output_len += max(seq_group.predicted_len - seq_group.output_len, 0)
+        for seq_group in self.waiting:
+            predicted_remaining_output_len += max(seq_group.predicted_len - seq_group.output_len, 0)
+        return (predicted_remaining_output_len + self.cache_config.block_size - 1) // self.cache_config.block_size
 
     def _get_instance_info(self, scheduled_seq_groups: List[SequenceGroupLlumnix]) -> InstanceInfo:
         num_total_gpu_blocks = self.cache_config.num_gpu_blocks
@@ -219,7 +236,7 @@ class SchedulerLlumnix(Scheduler):
             num_blocks_waiting_requests = []
             waiting_time_waiting_requests = []
             for seq_group in self.waiting:
-                num_prompt_tokens = seq_group.get_seqs()[0].get_len()
+                num_prompt_tokens = seq_group.request_len
                 num_blocks = num_prompt_tokens / self.cache_config.block_size
                 waiting_time = time.time() - seq_group.metrics.arrival_time
                 num_blocks_waiting_requests.append(num_blocks)
@@ -243,6 +260,7 @@ class SchedulerLlumnix(Scheduler):
             num_blocks_first_waiting_request=num_blocks_first_waiting_request,
             waiting_time_first_waiting_request=waiting_time_first_waiting_request,
             num_blocks_all_waiting_requests=num_blocks_all_waiting_requests,
+            num_preserved_blocks=self._get_preserved_blocks(),  # Zhixin: [PRED]
         )
         for seq_group in scheduled_seq_groups:
             instance_info.running_seq_lens.extend([seq.get_len() for seq in seq_group.get_seqs()])
@@ -253,13 +271,15 @@ class SchedulerLlumnix(Scheduler):
         instance_info.num_batched_tokens = sum([seq_group.request_len for seq_group in scheduled_seq_groups]) \
                                                 if instance_info.inference_type == RequestInferenceType.PREFILL \
                                                 else len(instance_info.running_seq_lens)
+        # logger.warning(f"[Zhixin] llumnix num_batched_tokens: {instance_info.num_batched_tokens} ({RequestInferenceType})")
         instance_info.finished_request_ids = [seq_group.request_id for seq_group in self.running if seq_group.finished]
         return instance_info
 
     def schedule(self) -> Tuple[List[SequenceGroupMetadata], SchedulerOutputs, bool]:
         seq_group_metadata_list, scheduler_outputs, allow_async_output_proc = super().schedule()
+        # Zhixin: update_instance_info_callback: LLMEngineLlumnix.update_instance_info
         self.update_instance_info_callback(self._get_instance_info([scheduled_seq_group.seq_group \
-                                            for scheduled_seq_group in scheduler_outputs.scheduled_seq_groups]))
+                                           for scheduled_seq_group in scheduler_outputs.scheduled_seq_groups]))
         for seq_group in self.waiting:
             seq_group.try_schedule_times += 1
         return seq_group_metadata_list, scheduler_outputs, allow_async_output_proc

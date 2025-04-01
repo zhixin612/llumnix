@@ -12,6 +12,7 @@
 # limitations under the License.
 
 import asyncio
+import itertools
 import random
 import time
 import csv
@@ -68,6 +69,7 @@ class TensorWriter(Process):
             InstanceType.DECODE: 0,
             InstanceType.NO_CONSTRAINTS: 0,
         }
+        logger.warning(f"TensorWriter initialization: logdir = {logdir}")
 
     # only used for parent process
     def convert_instance_id(self, instance_type: InstanceType):
@@ -159,6 +161,10 @@ class TensorWriter(Process):
                                     {info.instance_id_str: info.gpu_cache_usage for info in infos}, self.step)
             self.writer.add_scalars('instance.mem/available_blocks',
                                     {info.instance_id_str: info.num_available_gpu_blocks for info in infos}, self.step)
+            self.writer.add_scalars('instance.mem/preserved_blocks',
+                                    {info.instance_id_str: info.num_preserved_blocks for info in infos}, self.step)
+            self.writer.add_scalars('instance.mem/used_blocks',
+                                    {info.instance_id_str: info.num_used_gpu_blocks for info in infos}, self.step)
             # self.writer.add_scalars('instance/other/num_blocks_first_waiting_request',
             #                         {info.instance_id_str: info.num_blocks_first_waiting_request
             #                          for info in infos}, self.step)
@@ -186,7 +192,6 @@ class TensorWriter(Process):
             #                                     {info.instance_id_str: info.waiting_time_first_waiting_request
             #                                      for info in infos}, self.step)
 
-            self.writer.flush()
             self.step += 1  # only increase step when write instance info
 
 
@@ -244,31 +249,17 @@ class Manager:
                                            manager_args.enable_port_offset_store, manager_args.enable_pd_disagg,
                                            manager_args.enable_engine_pd_disagg, manager_args.pd_ratio)
 
+        # Zhixin: counter for instance_id
+        self.instance_id_counter = itertools.count(1)
+
         # Zhixin: tensorboard logger
         # TODO(Zhixin): add a parameter to disable or enable tensorboard writer
         self.tensor_logdir = manager_args.log_filename
-        self.enable_tensorboard = self.tensor_logdir is not None
+        self.enable_tensorboard = manager_args.enable_tensorboard
         if self.enable_tensorboard:
             self.tensor_queue = Queue()
             self.tensor_writer = TensorWriter(self.tensor_queue, manager_args.log_filename, ".manager")
             self.tensor_writer.start()
-
-        # self.tensorboard_logdir = manager_args.log_filename
-        # self.tensorboard_writer = None
-        # if self.tensorboard_logdir is not None:
-        #     self.tensorboard_step = 0
-        #     os.makedirs(self.tensorboard_logdir, exist_ok=True)
-        #     self.tensorboard_writer = tensorboardX.SummaryWriter(
-        #         logdir=self.tensorboard_logdir,
-        #         filename_suffix=".manager",
-        #         flush_secs=5,
-        #     )
-        #     # set instance_id_str to instances for tensorboard
-        #     self.tensorboard_instance_id_str = {
-        #         InstanceType.PREFILL: 0,
-        #         InstanceType.DECODE: 0,
-        #         InstanceType.NO_CONSTRAINTS: 0,
-        #     }
 
         # log args
         self.log_requests = not manager_args.disable_log_requests_manager
@@ -321,6 +312,10 @@ class Manager:
                            "and regenerate request {}.".format(NO_INSTANCE_RETRY_INTERVAL, request_id))
             await asyncio.sleep(NO_INSTANCE_RETRY_INTERVAL)
 
+        # Zhixin: [PRED] get predicted output length here
+        # TODO(Mingfang): Implement the function to get predicted output length
+        predicted_len = kwargs.get('predicted_len', 0)
+
         instance_id, request_expected_steps = self.global_scheduler.dispatch()
         try:
             if hasattr(server_info, 'request_timestamps'):
@@ -328,8 +323,8 @@ class Manager:
             await self.instances[instance_id].generate.remote(request_id, server_info, request_expected_steps, *args,
                                                               **kwargs)
             if self.log_requests:
-                logger.info("manager receive request {}".format(request_id))
-                logger.info("dispath request {} to instance {}".format(request_id, instance_id))
+                logger.debug("manager receive request {}".format(request_id))
+                logger.debug("dispath request {} to instance {}".format(request_id, instance_id))
                 self.request_instance[request_id] = instance_id
         except (ray.exceptions.RayActorError, KeyError):
             logger.info("Instance {} is dead, regenerate request {}.".format(instance_id, request_id))
@@ -445,8 +440,8 @@ class Manager:
                     self.request_instance[migrate_out_request_id] = migrate_instance_pair[1]
 
                     # Zhixin: increase indent to avoid empty migration message
-                    logger.info("instance {}->{} migrate done, migrate request {}".format(
-                        migrate_instance_pair[0], migrate_instance_pair[1], migrate_out_request_ids))
+                    # logger.info(f"instance {migrate_instance_pair[0]}->{migrate_instance_pair[1]} migrate done, "
+                    #             f"migrate request {migrate_out_request_ids}")
                 # Yongfeng: [important] type of migration to count
                 if pair_migration_type == PairMigrationConstraints.DECODING_2_DECODING:
                     self.migration_request_num += len(migrate_out_request_ids)
@@ -499,7 +494,7 @@ class Manager:
                         continue
                     self.scale_down(instance_id)
                 if new_pg is None:
-                    new_instance_id = random_uuid()
+                    new_instance_id = f'instance-{next(self.instance_id_counter)}'
                     new_pg = self.launcher.init_placement_group(get_placement_group_name(new_instance_id),
                                                                 self.engine_args, self.backend_type,
                                                                 init_server=True, block=False)
@@ -730,7 +725,7 @@ class Manager:
             else:
                 instance_id_str = "NONE"
 
-            instance_id = random_uuid()
+            instance_id = f'instance-{next(self.instance_id_counter)}'
             placement_group = self.launcher.init_placement_group(get_placement_group_name(instance_id), engine_args,
                                                                  backend_type)
             instance = self.launcher.init_instance(instance_id, instance_id_str, instance_args, placement_group,

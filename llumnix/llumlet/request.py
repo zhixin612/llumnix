@@ -35,12 +35,16 @@ class RequestStatus(str, Enum):
 
 
 class LlumnixRequest:
-    def __init__(self, request_id: int, server_info: ServerInfo, expected_steps: int) -> None:
+    def __init__(self, request_id: int, server_info: ServerInfo,
+                 expected_steps: int, predicted_len: int = 0) -> None:
         self.request_id = request_id
         self.server_info = server_info
 
         # strict pre-migration args
         self.expected_steps = expected_steps
+
+        # Zhixin: [PRED] output length prediction
+        self.predicted_len = predicted_len
 
         # migration args
         self.last_preemption_time = None

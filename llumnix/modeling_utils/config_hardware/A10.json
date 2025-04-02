@@ -1,0 +1,6 @@
+{
+  "compute_FP16_TFLOPS": 31.24,
+  "memory_bandwidth_GBps": 600.2,
+  "memory_size_GB": 24,
+  "gpu_bandwidth_GBps": 32
+}

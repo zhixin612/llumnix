@@ -1,14 +1,14 @@
 | Decode (per layer)   | Compute Load  | Memory Access | Communication    |
 | -------------------- | ------------- | ------------- | ---------------- |
 | 1. Embedding(Once)   | $2BvH$        | $vH$          | $0$              |
-| 2. LayerNorm         | $4BSH(RMS)$   | $4BSH$        | $0$              |
+| 2. LayerNorm         | $4BH(RMS)$    | $4BH$         | $0$              |
 | 3. QKV               | $2BHH+4BHnd$  | $HH+2Hnd$     | $0$              |
 | 4. Attention         | $4BSH$        | $0$           | $0$              |
 | 5. (mem)KVcahce      | $0$           | $2Bnd$        | $0$              |
 | 6. (comm) AllGather  | $0$           | $0$           | $4BH/tp$         |
 | 7. O_proj            | $2BHH$        | $HH$          | $0$              |
 | 8. (comm) AllReduce  | $0$           | $0$           | $BH(tp-1)/tp$    |
-| 9. LayerNorm         | $4BSH(RMS)$   | $4BH$         | $0$              |
+| 9. LayerNorm         | $4BH(RMS)$    | $4BH$         | $0$              |
 | 10. Up and Gate      | $4BHI / 2BHI$ | $HI / 2HI$    | $0$              |
 | 11. Gate*Up          | $BI$          | $0$           | $0$              |
 | 12. (mem)activation  | $0$           | $2BI$         | $0$              |

@@ -21,7 +21,7 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from ray.util.placement_group import PlacementGroup
 
 from llumnix.logging.logger import init_logger
-from llumnix.instance_info import InstanceInfo, InstanceLoadCalculator
+from llumnix.instance_info import InstanceInfo, InstanceLoadCalculator, CustomLoadCalculator
 from llumnix.backends.backend_interface import BackendInterface, BackendType, EngineState
 from llumnix.backends.utils import init_backend_engine, get_engine_world_size
 from llumnix.llumlet.migration_coordinator import MigrationCoordinator, MigrationStatus
@@ -64,6 +64,8 @@ class Llumlet:
                 migration_load_metric=instance_args.migration_load_metric,
                 enable_defrag=instance_args.enable_defrag
             )
+            # [Zhixin] custom load calculator
+            self.custom_load_calculator = CustomLoadCalculator()
             migration_config: MigrationConfig = instance_args.create_migration_config()
             self.backend_engine: BackendInterface = init_backend_engine(instance_id,
                                                                         placement_group,
@@ -213,7 +215,14 @@ class Llumlet:
         instance_info: InstanceInfo = self.backend_engine.engine.instance_info
         instance_info.instance_id_str = self.instance_id_str
         instance_info.instance_type = self.instance_args.instance_type
+
+        # [Zhixin]: custom load calculator
+        if self.instance_args.instance_type == 'prefill':
+            instance_info.num_preserved_blocks = 0
+        self.custom_load_calculator.compute_instance_load(instance_info)
+
         self.instance_load_calculator.compute_instance_load(instance_info)
+
         return instance_info
 
     def is_ready(self) -> bool:

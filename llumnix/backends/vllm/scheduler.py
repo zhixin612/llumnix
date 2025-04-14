@@ -264,6 +264,9 @@ class SchedulerLlumnix(Scheduler):
         )
         for seq_group in scheduled_seq_groups:
             instance_info.running_seq_lens.extend([seq.get_len() for seq in seq_group.get_seqs()])
+            # Fixme(Zhixin): move predicted_len from llumnix.request to vllm.Sequence
+            #  since each seq may have different predicted_len
+            instance_info.running_seq_predicted_lens.extend([seq_group.predicted_len for _ in seq_group.get_seqs()])
             instance_info.num_seqs = len(instance_info.running_seq_lens)
         if scheduled_seq_groups:
             instance_info.inference_type = scheduled_seq_groups[-1].inference_type

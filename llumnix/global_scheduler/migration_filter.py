@@ -77,6 +77,7 @@ class MigrationInstanceFilter(ABC):
         return filtered_src_instance_infos, filtered_dst_instance_infos
 
 class LoadConstrainedFilter(MigrationFilterPolicy):
+    # used for NO_CONSTRAINTS and DECODING_2_DECODING pair migration types.
     def filter_src_condition(self, filter_config: MigrationFilterConfig,
                              pair_migration_type: PairMigrationConstraints) -> Callable[[InstanceInfo], bool]:
         return lambda instance_info: instance_info.num_killed_requests > 0 \
@@ -88,6 +89,7 @@ class LoadConstrainedFilter(MigrationFilterPolicy):
             and instance_info.migration_load_metric < filter_config.migrate_out_load_threshold
 
 class PddFilter(MigrationFilterPolicy):
+    # used for PREFILL_2_DECODING pair migration type: src: PREFILL instances, dst: DECODE instances (w/o killed requests)
     INSTANCE_FILTER_RULES = {
         PairMigrationConstraints.DECODING_2_DECODING: (InstanceType.DECODE, InstanceType.DECODE),
         PairMigrationConstraints.PREFILL_2_DECODING: (InstanceType.PREFILL, InstanceType.DECODE),

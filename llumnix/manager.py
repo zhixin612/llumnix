@@ -90,44 +90,45 @@ class TensorWriter(Process):
 
     def write_info(self, tag: str, infos: List[InstanceInfo] or Dict):
         if tag == 'migration':
-            self.writer.add_scalar('scheduler.mig/blocks_cnt', infos['blocks_cnt'], self.step)
-            self.writer.add_scalar('scheduler.mig/request_cnt', infos['request_cnt'], self.step)
+            # self.writer.add_scalar('scheduler.mig/blocks_cnt', infos['blocks_cnt'], self.step)
+            # self.writer.add_scalar('scheduler.mig/request_cnt', infos['request_cnt'], self.step)
+            pass
         elif tag == 'instance':
             # split prefill and decode info
             pinfos = [info for info in infos if info.instance_type == InstanceType.PREFILL]
             dinfos = [info for info in infos if info.instance_type == InstanceType.DECODE]
 
             # INFO: instance info
-            self.writer.add_scalar('scheduler.instance/num_instances', len(infos), self.step)
-            self.writer.add_scalar('scheduler.instance/num_instances_prefill', len(pinfos), self.step)
-            self.writer.add_scalar('scheduler.instance/num_instances_decode', len(dinfos), self.step)
+            # self.writer.add_scalar('scheduler.instance/num_instances', len(infos), self.step)
+            # self.writer.add_scalar('scheduler.instance/num_instances_prefill', len(pinfos), self.step)
+            # self.writer.add_scalar('scheduler.instance/num_instances_decode', len(dinfos), self.step)
 
             # INFO: gpu mem info
             if len(pinfos):
                 self.writer.add_scalar('scheduler.mem/P/usage_avg', np.average(
                     [info.gpu_cache_usage for info in pinfos]), self.step)
-                self.writer.add_scalar('scheduler.mem/P/used_blocks_tot', np.average(
-                    [info.num_used_gpu_blocks for info in pinfos]), self.step)
-                self.writer.add_scalar('scheduler.mem/P/available_blocks_tot', np.sum(
-                    [info.num_available_gpu_blocks for info in pinfos]), self.step)
+                # self.writer.add_scalar('scheduler.mem/P/used_blocks_tot', np.average(
+                #     [info.num_used_gpu_blocks for info in pinfos]), self.step)
+                # self.writer.add_scalar('scheduler.mem/P/available_blocks_tot', np.sum(
+                #     [info.num_available_gpu_blocks for info in pinfos]), self.step)
             if len(dinfos):
                 self.writer.add_scalar('scheduler.mem/D/usage_avg', np.average(
                     [info.gpu_cache_usage for info in dinfos]), self.step)
-                self.writer.add_scalar('scheduler.mem/D/used_blocks_tot', np.average(
-                    [info.num_used_gpu_blocks for info in dinfos]), self.step)
-                self.writer.add_scalar('scheduler.mem/D/available_blocks_tot', np.sum(
-                    [info.num_available_gpu_blocks for info in dinfos]), self.step)
+                # self.writer.add_scalar('scheduler.mem/D/used_blocks_tot', np.average(
+                #     [info.num_used_gpu_blocks for info in dinfos]), self.step)
+                # self.writer.add_scalar('scheduler.mem/D/available_blocks_tot', np.sum(
+                #     [info.num_available_gpu_blocks for info in dinfos]), self.step)
 
             # INFO: load info
             loads = {}
             if len(pinfos):
                 loads.update({
-                    'scheduler.load/P/load_dispatch_std': np.std([info.dispatch_load_metric for info in pinfos]),
+                    # 'scheduler.load/P/load_dispatch_std': np.std([info.dispatch_load_metric for info in pinfos]),
                     'scheduler.load/P/load_migration_std': np.std([info.migration_load_metric for info in pinfos]),
                 })
             if len(dinfos):
                 loads.update({
-                    'scheduler.load/D/load_dispatch_std': np.std([info.dispatch_load_metric for info in dinfos]),
+                    # 'scheduler.load/D/load_dispatch_std': np.std([info.dispatch_load_metric for info in dinfos]),
                     'scheduler.load/D/load_migration_std': np.std([info.migration_load_metric for info in dinfos]),
                 })
             # 'scheduler.load/load_dispatch_min': min([info.dispatch_load_metric for info in infos]),
@@ -143,15 +144,15 @@ class TensorWriter(Process):
                     [info.num_batched_tokens for info in pinfos]) if len(pinfos) > 0 else 0, self.step)
                 self.writer.add_scalar('scheduler.req/P/running_tot', np.sum(
                     [info.num_running_requests for info in pinfos]) if len(pinfos) > 0 else 0, self.step)
-                self.writer.add_scalar('scheduler.req/P/waiting_tot', np.sum(
-                    [info.num_running_requests for info in pinfos]) if len(pinfos) > 0 else 0, self.step)
+                # self.writer.add_scalar('scheduler.req/P/waiting_tot', np.sum(
+                #     [info.num_running_requests for info in pinfos]) if len(pinfos) > 0 else 0, self.step)
             if len(dinfos):
                 self.writer.add_scalar('scheduler.req/D/batch_size_avg', np.average(
                     [info.num_batched_tokens for info in dinfos]) if len(dinfos) > 0 else 0, self.step)
                 self.writer.add_scalar('scheduler.req/D/running_tot', np.sum(
                     [info.num_running_requests for info in dinfos]) if len(dinfos) > 0 else 0, self.step)
-                self.writer.add_scalar('scheduler.req/D/waiting_tot', np.sum(
-                    [info.num_running_requests for info in dinfos]) if len(dinfos) > 0 else 0, self.step)
+                # self.writer.add_scalar('scheduler.req/D/waiting_tot', np.sum(
+                #     [info.num_running_requests for info in dinfos]) if len(dinfos) > 0 else 0, self.step)
 
             # instance info ********************************************************************************************
             # TODO(Zhixin): timestamp and step of each instance haven't been used. Not precise currently.
@@ -168,23 +169,29 @@ class TensorWriter(Process):
             # self.writer.add_scalars('instance/other/num_blocks_first_waiting_request',
             #                         {info.instance_id_str: info.num_blocks_first_waiting_request
             #                          for info in infos}, self.step)
-            self.writer.add_scalars('instance.mem/num_blocks_all_waiting_requests',
-                                    {info.instance_id_str: info.num_blocks_all_waiting_requests
-                                     for info in infos}, self.step)
+            # self.writer.add_scalars('instance.mem/num_blocks_all_waiting_requests',
+            #                         {info.instance_id_str: info.num_blocks_all_waiting_requests
+            #                          for info in infos}, self.step)
 
             # INFO: load info
             load_dispatch = {info.instance_id_str: info.dispatch_load_metric for info in infos}
             load_migration = {info.instance_id_str: info.migration_load_metric for info in infos}
-            self.writer.add_scalars('instance.load/load', load_dispatch, self.step)
-            self.writer.add_scalars('instance.load/migration', load_migration, self.step)
+            load_100_memory = {info.instance_id_str: info.load_100_memory for info in infos}
+            load_100_bandwidth = {info.instance_id_str: info.load_100_bandwidth for info in infos}
+            load_100_compute = {info.instance_id_str: info.load_100_compute for info in infos}
+            self.writer.add_scalars('instance.load/load_dispatch', load_dispatch, self.step)
+            self.writer.add_scalars('instance.load/load_migration', load_migration, self.step)
+            self.writer.add_scalars('instance.load/load_100_memory', load_100_memory, self.step)
+            self.writer.add_scalars('instance.load/load_100_bandwidth', load_100_bandwidth, self.step)
+            self.writer.add_scalars('instance.load/load_100_compute', load_100_compute, self.step)
 
             # INFO: request & compute info
-            self.writer.add_scalars('instance.req/running',
-                                    {info.instance_id_str: info.num_running_requests for info in infos}, self.step)
-            self.writer.add_scalars('instance.req/waiting',
-                                    {info.instance_id_str: info.num_waiting_requests for info in infos}, self.step)
             self.writer.add_scalars('instance.req/batch_size',
                                     {info.instance_id_str: info.num_batched_tokens for info in infos}, self.step)
+            self.writer.add_scalars('instance.req/running',
+                                    {info.instance_id_str: info.num_running_requests for info in infos}, self.step)
+            # self.writer.add_scalars('instance.req/waiting',
+            #                         {info.instance_id_str: info.num_waiting_requests for info in infos}, self.step)
             # self.writer.add_scalars('instance/other/num_seqs',
             #                                     {info.instance_id_str: len(info.running_seq_lens) for info in
             #                                      infos}, self.step)
@@ -894,9 +901,14 @@ class Manager:
             'instance_id',
             'step_id',
             'gpu_cache_usage',
+            'num_total_gpu_blocks',
             'num_available_gpu_blocks',
+            'num_preserved_blocks',
             'dispatch_load_metric',
             'migration_load_metric',
+            'load_100_memory',
+            'load_100_bandwidth',
+            'load_100_compute',
             'num_running_requests',
             'num_waiting_requests',
             'num_killed_requests',
@@ -904,6 +916,7 @@ class Manager:
             'bs',
             'profiling_data',
             'seq_lens',
+            'seq_lens_pred',
             'num_instances',
             'num_seqs',
             'num_blocks_first_waiting_request',
@@ -926,9 +939,14 @@ class Manager:
                     instance_info.instance_id,
                     instance_info.step_id,
                     instance_info.gpu_cache_usage,
+                    instance_info.num_total_gpu_blocks,
                     instance_info.num_available_gpu_blocks,
+                    instance_info.num_preserved_blocks,
                     instance_info.dispatch_load_metric,
                     instance_info.migration_load_metric,
+                    instance_info.load_100_memory,
+                    instance_info.load_100_bandwidth,
+                    instance_info.load_100_compute,
                     instance_info.num_running_requests,
                     instance_info.num_waiting_requests,
                     instance_info.num_killed_requests,
@@ -936,6 +954,7 @@ class Manager:
                     instance_info.num_batched_tokens,
                     instance_info.profiling_data,
                     instance_info.running_seq_lens,
+                    instance_info.running_seq_predicted_lens,
                     self.num_instances,
                     instance_info.num_seqs,
                     instance_info.num_blocks_first_waiting_request,

@@ -413,7 +413,8 @@ class InstanceArgs:
                             help='instance dispatch load metric')
         parser.add_argument('--migration-load-metric',
                             type=str,
-                            choices=['remaining_steps', 'usage_ratio', 'predicted_remaining_blocks', 'predicted_used_blocks'],
+                            choices=['remaining_steps', 'usage_ratio', 'predicted_remaining_blocks',
+                                     'predicted_used_blocks', 'sct_max', 'sct_mem', 'sct_bw', 'sct_comp'],
                             help='instance migration load metric')
         parser.add_argument('--enable-defrag',
                             type=bool,

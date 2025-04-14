@@ -117,23 +117,22 @@ def peak_mem_overhead_prefill(model_name, m: ModelConfig, S, bytes_per_param):
         raise ValueError(f"Unsupported model {model_name}")
 
 
-def peak_mem_overhead_decode(model_name, m: ModelConfig, context_len, bytes_per_param):
+def peak_mem_overhead_decode(model_name, m: ModelConfig, context_len_total, bytes_per_param, batch_size=1):
     # F = max{Q+attn_score, hidden_state+up_proj+residual(+gate)} * bytes_per_param
     #   = max{ H+S, H+I+H(+I) } * bytes_per_param
     H, L, N, n, I, d, v, gate = m.H, m.L, m.L, m.n, m.I, m.d, m.v, m.gate
     if model_name.startswith(('Qwen2.5', 'Llama-3', 'Llama-2', 'QwQ')):
-        return max(H+context_len, 2*H+2*I) * bytes_per_param
+        return max(batch_size*H+context_len_total, (2*H+2*I)*batch_size) * bytes_per_param
     elif model_name.startswith('Qwen-'):
-        return max(H+context_len, 2*H+I) * bytes_per_param
+        return max(batch_size*H+context_len_total, (2*H+I)*batch_size) * bytes_per_param
     else:
         raise ValueError(f"Unsupported model {model_name}")
 
 
 def kv_size_per_token(m: ModelConfig, bytes_per_param):
     # F = 2ndL * bytes * S
-    H, L, N, n, I, d, v, gate = m.H, m.L, m.L, m.n, m.I, m.d, m.v, m.gate
-    kv_size = 2 * (n * d)
-    return L * kv_size * bytes_per_param
+    kv_size = 2 * (m.n * m.d)
+    return m.L * kv_size * bytes_per_param
 
 
 def analysis_single_model(model_name: str, bytes_per_param: int = 2) -> dict:

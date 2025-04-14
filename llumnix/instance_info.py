@@ -20,6 +20,7 @@ import numpy as np
 
 from llumnix.logging.logger import init_logger
 from llumnix.llumlet.request import RequestInferenceType
+from llumnix.modeling_utils.calculator import *
 
 logger = init_logger(__name__)
 
@@ -59,12 +60,18 @@ class InstanceInfo:
 
     # Zhixin: [PRED] num_preserved_blocks used for predicted but not yet generated tokens
     num_preserved_blocks: int = 0
+    running_seq_predicted_lens: List[int] = field(default_factory=list)
 
     # on-demand init infos
     dispatch_load_metric: float = -np.inf
     migration_load_metric: float = np.inf
     migration_load_metric_after_migrate_in: float = -np.inf
     migration_load_metric_after_migrate_out: float = np.inf
+
+    # [Zhixin] extra instance load metric (calculated in manager)
+    load_100_memory: float = 0
+    load_100_bandwidth: float = 0
+    load_100_compute: float = 0
 
     # lazy init infos
     num_available_gpu_blocks: int = 0
@@ -86,10 +93,69 @@ class InstanceLoadCalculator:
     def compute_instance_load(self, instance_info: InstanceInfo):
         instance_info.dispatch_load_metric = self.dispatch_load_calculator.compute_instance_load(instance_info)
         instance_info.migration_load_metric = self.migration_load_calculator.compute_instance_load(instance_info)
+
+        # [Zhixin] only used for balanced migration policy
         instance_info.migration_load_metric_after_migrate_out = self.migration_load_calculator. \
             compute_instance_load_after_migrate(instance_info, is_migrate_in=False)
         instance_info.migration_load_metric_after_migrate_in = self.migration_load_calculator. \
             compute_instance_load_after_migrate(instance_info, is_migrate_in=True)
+
+
+class CustomLoadCalculator:
+    # Fixme(Zhixin): should consider waiting request (with small max_num_seqs)
+    def __init__(self,
+                 model_name: str = 'Qwen2.5-7B',
+                 hardware_name: str = 'A800_practical',
+                 block_size: str = 16,
+                 TPOT_ms: float = 50,
+                 TTFT_ms: float = 1000
+                 ):
+        # [Zhixin] currently only support decode phase
+        self.model_name = model_name
+        self.model_config = ModelConfig(model_name)
+        self.hardware_name = hardware_name
+        self.hw_config = HWConfig(hardware_name)
+        self.block_size = block_size
+        self.TPOT_s = TPOT_ms / 1000
+        self.TTFT_s = TTFT_ms / 1000
+
+        # TODO(Zhixin): add a factor to max_bandwidth_gbps and max_compute_gflops to simulate the real situation
+
+        self.max_bandwidth_gbps = self.hw_config.memory_bw  # GB/s
+        self.max_compute_gflops = self.hw_config.compute * 1e3  # GFLOPS
+        self.weight_size_gb = compute_param_size(model_name, self.model_config) * 2 / (1024 ** 3)  # GB
+        self.kv_size_per_block_gb = kv_size_per_token(self.model_config, 2) * self.block_size / (1024 ** 3)  # GB
+
+    def compute_instance_load(self, info: InstanceInfo):
+        info.load_100_memory = self.get_memory_load(
+            info.num_used_gpu_blocks, info.num_preserved_blocks, info.num_total_gpu_blocks)
+        if info.instance_type == 'decode':
+            info.load_100_bandwidth = self.get_bandwidth_load(
+                info.num_blocks_last_running_request, info.num_preserved_blocks, is_decode=True)
+            info.load_100_compute = self.get_compute_load(info.running_seq_lens, is_decode=True)
+        else:
+            info.load_100_bandwidth = 0
+            info.load_100_compute = 0
+
+    def get_memory_load(self, blocks_used, blocks_preserved, blocks_total) -> float:
+        return (blocks_used + blocks_preserved) / blocks_total
+
+    def get_bandwidth_load(self, blocks_generated, blocks_preserved, is_decode: bool) -> float:
+        # Fixme(Zhixin): this may not precise, since the activation also need to be transferred
+        if not is_decode:
+            raise ValueError("Currently only support decode phase.")
+        usable_memory_bw_per_step = self.max_bandwidth_gbps * self.TPOT_s - self.weight_size_gb
+        return (blocks_generated + blocks_preserved) * self.kv_size_per_block_gb / usable_memory_bw_per_step
+
+    def get_compute_load(self, running_seq_lens: List[int], is_decode: bool) -> float:
+        if not is_decode:
+            raise ValueError("Currently only support decode phase.")
+        usable_compute_per_step = self.max_compute_gflops * self.TPOT_s
+        compute_per_step = 0
+        for seq_len in running_seq_lens:
+            compute_per_step += compute_load_decode(self.model_name, self.model_config, seq_len)
+        compute_per_step /= (1000 ** 3)  # GFLOPs
+        return compute_per_step / usable_compute_per_step
 
 
 class LoadComputationStrategy(ABC):
@@ -136,12 +202,12 @@ class DispatchLoadComputation(LoadComputationStrategy):
 
 class MigrationLoadComputation(LoadComputationStrategy):
     def compute_instance_load_after_migrate(self, instance_info: InstanceInfo, is_migrate_in: bool) -> float:
+        # used for balanced migration policy -> estimate instance load after migrate_in / migrate_out
         instance_info_after_migrate = copy.deepcopy(instance_info)
         num_blocks_last_running_request = instance_info_after_migrate.num_blocks_last_running_request
 
         if is_migrate_in:
             instance_info_after_migrate.num_running_requests += 1
-            # TODO(Zhixin): Why minus num_blocks_last_running_request?
             instance_info_after_migrate.num_available_gpu_blocks -= num_blocks_last_running_request
         else:
             instance_info_after_migrate.num_running_requests -= 1
@@ -169,9 +235,6 @@ class MigrationLoadComputation(LoadComputationStrategy):
                 return num_available_gpu_blocks * -2  # ZhiXin: change to return the number of available blocks
             instance_load = (num_available_gpu_blocks / num_requests) * (-1)
         elif self.load_metric == 'predicted_remaining_blocks':
-            if instance_info.instance_type not in [InstanceType.DECODE, InstanceType.NO_CONSTRAINTS]:
-                logger.error(f'predicted_remaining_blocks is not supported for {instance_info.instance_type}')
-
             if not self.enable_defrag:
                 raise ValueError('predicted_remaining_blocks is not supported without defrag')
             else:
@@ -181,8 +244,6 @@ class MigrationLoadComputation(LoadComputationStrategy):
                 num_available_gpu_blocks = instance_info.num_available_gpu_blocks - \
                                            instance_info.num_blocks_all_waiting_requests
                 if instance_info.instance_type == InstanceType.DECODE:
-                    logger.warning(
-                        f'init num_available_gpu_blocks: {num_available_gpu_blocks}  |  new num_available_gpu_blocks: {num_available_gpu_blocks - instance_info.num_preserved_blocks}')
                     num_available_gpu_blocks -= instance_info.num_preserved_blocks
 
             instance_load = num_available_gpu_blocks * (-1)
@@ -192,9 +253,16 @@ class MigrationLoadComputation(LoadComputationStrategy):
             # Fixme(Zhixin): "used_blocks" should be a percentage instead of an absolute number
             instance_load = instance_info.num_used_gpu_blocks + instance_info.num_preserved_blocks
 
-
-        # TODO(Zhixin): add compute load metric here!!!!!!!!!!!
-
+        elif self.load_metric == 'sct_max':
+            # [Zhixin] custom load for migration
+            instance_load = max(
+                instance_info.load_100_bandwidth, instance_info.load_100_compute, instance_info.load_100_memory)
+        elif self.load_metric == 'sct_mem':
+            instance_load = instance_info.load_100_memory
+        elif self.load_metric == 'sct_bw':
+            instance_load = instance_info.load_100_bandwidth
+        elif self.load_metric == 'sct_comp':
+            instance_load = instance_info.load_100_compute
 
         else:
             logger.error(f"Invalid migration load metric: {self.load_metric}")

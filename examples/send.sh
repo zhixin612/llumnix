@@ -1,7 +1,7 @@
 export IP_PORTS=127.0.0.1:18000
 export MODEL_PATH="/root/share/models/Qwen2.5-7B-Instruct"
 export DATASET_PATH="/root/.cache/huggingface/hub/datasets--shibing624--sharegpt_gpt4/snapshots/3fb53354e02a931777556fb1da37e931d73af48a/sharegpt_gpt4.jsonl"
-export CUDA_VISIBLE_DEVICES=0,1,2,3  # should same to online.sh
+export CUDA_VISIBLE_DEVICES=1,2,3,4,5,6  # should same to online.sh
 
 echo "[WARNING] Start GPU monitor on devices: $CUDA_VISIBLE_DEVICES"
 
@@ -32,7 +32,7 @@ echo "[WARNING] Start GPU monitor on devices: $CUDA_VISIBLE_DEVICES"
 python ../benchmark/bench_plus.py \
     --ip_ports "${IP_PORTS[@]}" \
     --tokenizer $MODEL_PATH \
-    --random_prompt_count   200 \
+    --random_prompt_count   500 \
     --warmup_request_count  50 \
     --max_request_len       8192 \
     --gen_random_prompts \
@@ -41,14 +41,14 @@ python ../benchmark/bench_plus.py \
     --random_prompt_lens_range 512 \
     --allow_random_gen_len \
     --random_response_lens_distribution "exponential" \
-    --random_response_lens_mean  384 \
-    --random_response_lens_range 1024 \
+    --random_response_lens_mean  512 \
+    --random_response_lens_range 4096 \
     --qps                   6 \
     --distribution          "uniform" \
     --log_latencies \
     --fail_on_response_failure \
-    --log_dir               "./logs/bench-migration-0331-pred/test"
-#    --log_dir               "./logs/bench-migration-0331-pred/exp-128-512_exp-384-1024_Q6_uni_Q6_1P3D"
+    --log_dir               "./logs/bench-migration-0402-sct/mig-sct-bw_exp-128-512_exp-512-4k_uni-Q6-500_2P4D"
+#    --log_dir               "./logs/bench-migration-0331-pred/mig-pred-remain_exp-128-512_exp-384-1024_uni-Q6-1K_1P3D"
 #    --log_dir               "./logs/0327-llumnix-base-benchmark/batch_size_check_1P1D_B1"
 
 

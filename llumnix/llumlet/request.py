@@ -44,6 +44,7 @@ class LlumnixRequest:
         self.expected_steps = expected_steps
 
         # Zhixin: [PRED] output length prediction
+        # Fixme(Zhixin): move predicted_len to vllm.Sequence since each seq may have different predicted_len
         self.predicted_len = predicted_len
 
         # migration args

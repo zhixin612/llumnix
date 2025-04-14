@@ -48,15 +48,11 @@ class MigrationScheduler:
 
     # migration_filter must ensure that the specific instance_info does not appear in both src and dst simultaneously
     def pair_migration(self, pair_migration_type: PairMigrationConstraints) -> List[Tuple[str, str]]:
+        # used for PREFILL_2_DECODING, filter out prefill (src) and decoding (dst) instances.
         src_instance_infos, dst_instance_infos = self.migration_filter.filter_instances(
             self.instance_info.values(), pair_migration_type)
 
-        # [Zhixin] debug
-        # src_instances = [instance_info.instance_id_str for instance_info in src_instance_infos]
-        # dst_instances = [instance_info.instance_id_str for instance_info in dst_instance_infos]
-        # if len(src_instances) != 0 or len(dst_instances) != 0:
-        #     logger.warning(f'[Zhixin] [MIGRATION]: src_instances={src_instances}, dst_instances={dst_instances}')
-
+        # used for PREFILL_2_DECODING, match prefill (src) and decoding (dst) instances as pairs.
         return self.pair_migration_policy.pair_migration(src_instance_infos, dst_instance_infos)
 
     def update_instance_infos(self, instance_info: Dict[str, InstanceInfo]) -> None:

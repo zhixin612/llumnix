@@ -18,12 +18,12 @@ MANAGER:
   #    since migration policy cannot push pairs (P0->D0 P1->D0) if D0 is underloaded
   POLLING_INTERVAL: 0.05
   LOG_INSTANCE_INFO: True  # Zhixin: board will be enabled only when this is True
-  LOG_FILENAME: "/root/llm/disagg/llumnix/examples/logs/bench-migration-0402-sct/mig-sct-bw_exp-128-512_exp-512-4k_uni-Q6-500_2P4D"
+  LOG_FILENAME: "/root/llm/disagg/llumnix/examples/logs/test/test_0414"
   ENABLE_TENSORBOARD: True
 
   INITIAL_INSTANCES: 1  # Zhixin
   ENABLE_PD_DISAGG: True  # Zhixin
-  PD_RATIO: "2:4"
+  PD_RATIO: "1:3"
 
   # -------------------------- DISPATCH CONFIGURATION ---------------------------
   # Zhixin: [Attention] dispatch policy and metric decide the PREFILL instance instead of DECODE instance
@@ -52,7 +52,7 @@ INSTANCE:
   # predicted_remaining_blocks
   # predicted_used_blocks
   # sct: sct_max, sct_mem, sct_bw, sct_comp
-  MIGRATION_LOAD_METRIC: 'sct_bw'
+  MIGRATION_LOAD_METRIC: 'remaining_steps'
 
   # -------------------------- MIGRATION CONFIGURATION --------------------------
   # Enable defragmentation through migration based on virtual usage

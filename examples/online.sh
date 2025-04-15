@@ -5,7 +5,7 @@ export HEAD_NODE_IP_ADDRESS=127.0.0.1
 export HEAD_NODE_IP=$HEAD_NODE_IP_ADDRESS
 # Configure on head node.
 export HEAD_NODE=1
-export CUDA_VISIBLE_DEVICES=4,5,6,7
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 export RAY_DEDUP_LOGS=0
 
 echo "[WARNING] Start serving on devices: $CUDA_VISIBLE_DEVICES"

@@ -309,9 +309,6 @@ class Manager:
             assert self.entrypoints_args is not None and self.engine_args is not None
             self.last_timeout_instance_id = None
             asyncio.create_task(self._auto_scale_up_loop(AUTO_SCALE_UP_INTERVAL))
-            asyncio.create_task(self._check_deployment_states_loop(CHECK_DEPLOYMENT_STATES_INTERVAL))
-            if self.manager_args.enable_pd_disagg:
-                asyncio.create_task(self._check_pd_deployment_states_loop(CHECK_DEPLOYMENT_STATES_INTERVAL))
 
     async def generate(self, request_id: str, server_info: ServerInfo, *args, **kwargs, ) -> None:
         while self.num_instances == 0:
@@ -374,7 +371,6 @@ class Manager:
             if not isinstance(ret, ray.exceptions.RayActorError):
                 if ret is not None:
                     instance_infos.append(ret)
-                    self.global_scheduler.update_instance_infos([ret])
             else:
                 logger.info("Instance {} is dead.".format(instance_id))
                 self.scale_down(instance_id)
@@ -384,12 +380,12 @@ class Manager:
                 await asyncio.sleep(interval)
                 tasks = []
                 instance_infos = []
-                for instance_id, instance in self.instances.items():
-                    # Use asyncio.gather to wrap ray remote call to add done callback, asyncio.create_task will get error.
-                    task = asyncio.gather(instance.get_instance_info.remote(), return_exceptions=True)
-                    task.add_done_callback(partial(update_instance_info_done_callback, instance_id))
-                    tasks.append(task)
-                await asyncio.gather(*tasks, return_exceptions=True)
+                # for instance_id, instance in self.instances.items():
+                #     # Use asyncio.gather to wrap ray remote call to add done callback, asyncio.create_task will get error.
+                #     task = asyncio.gather(instance.get_instance_info.remote(), return_exceptions=True)
+                #     task.add_done_callback(partial(update_instance_info_done_callback, instance_id))
+                #     tasks.append(task)
+                # await asyncio.gather(*tasks, return_exceptions=True)
                 self.num_instance_info_updates += 1
                 # Push migrate when the instance_info have updated a certain number of times.
                 if self.enable_migration and self.num_instance_info_updates != 0 \
@@ -411,9 +407,8 @@ class Manager:
     async def _push_migrations(self) -> None:
         if self.enable_pd_disagg:
             asyncio.create_task(self._migrate(PairMigrationConstraints.PREFILL_2_DECODING))
-            asyncio.create_task(self._migrate(PairMigrationConstraints.DECODING_2_DECODING))
         else:
-            asyncio.create_task(self._migrate(PairMigrationConstraints.NO_CONSTRAINTS))
+            raise ValueError("Pair migration is not supported in non-PD disaggregation mode.")
 
     async def _migrate(self, pair_migration_type: PairMigrationConstraints) -> None:
         # TODO(s5u13b): Remove the migration done callback through decentralized migration refactoring.
@@ -580,12 +575,6 @@ class Manager:
             self.pending_rebuild_migration_instances = 0
             group_name = None
 
-        migration_filter: CustomFilter = self.global_scheduler.migration_scheduler \
-            .migration_filter.get_filter("migration_backend_init_filter")
-        migration_filter.set_filter_condtition(
-            src_filter=lambda instance_info: instance_info.instance_id in alive_instances,
-            dst_filter=lambda instance_info: instance_info.instance_id in alive_instances)
-
         logger.info("Rebuild migration backend done, group_name: {}, alive instance ({}): {}."
                     .format(group_name, len(alive_instances), alive_instances))
 
@@ -743,94 +732,6 @@ class Manager:
         self.scale_up(instance_ids, instances, [instance_args] * len(instance_ids))
 
         return instance_ids, instances
-
-    def _inner_check_pd_deployment(self) -> str:
-        prefill_instance_ids = self.global_scheduler.dispatch_scheduler.available_dispatch_instance_set
-        cur_num_prefill = len(prefill_instance_ids)
-        decode_instance_ids = self.global_scheduler.instance_id_set - prefill_instance_ids
-        cur_num_decode = len(decode_instance_ids)
-
-        scale_down_instance_id = ""
-        if cur_num_prefill == 0 and cur_num_decode > 0:
-            scale_down_instance_id = random.choice(list(decode_instance_ids))
-            logger.info("[_inner_check_pd_deployment] pd_ratio: {}, cur_num_prefill: {}, cur_num_decode: {}, "
-                        "all decode, scale down decode instance {}".format(self.manager_args.pd_ratio,
-                                                                           cur_num_prefill, cur_num_decode,
-                                                                           scale_down_instance_id))
-
-        if cur_num_decode == 0 and cur_num_prefill > 0:
-            scale_down_instance_id = random.choice(list(prefill_instance_ids))
-            logger.info("[_inner_check_pd_deployment] pd_ratio: {}, cur_num_prefill: {}, cur_num_decode: {}, "
-                        "all prefill, scale down prefill instance {}".format(self.manager_args.pd_ratio,
-                                                                             cur_num_prefill, cur_num_decode,
-                                                                             scale_down_instance_id))
-
-        if scale_down_instance_id:
-            self.scale_down(scale_down_instance_id)
-
-        return scale_down_instance_id
-
-    # TODO(KuilongCui): currently, only one naive state check policy is implemented, which prevents the
-    # cluster from consisting entirely of prefill or decode instances.
-    async def _check_pd_deployment_states_loop(self, interval: float) -> None:
-        previous_penging_pg_names = None
-
-        while True:
-            try:
-                pending_pg_states = list_placement_groups(filters=[("state", "=", "PENDING")])
-                rescheduling_pg_states = list_placement_groups(filters=[("state", "=", "RESCHEDULING")])
-                all_penging_pg_names = [pg.name for pg in pending_pg_states]
-
-                if previous_penging_pg_names and len(rescheduling_pg_states) == 0:
-                    new_pending_pg_states = list_placement_groups(filters=[("state", "=", "PENDING")])
-                    all_new_penging_pg_names = [pg.name for pg in new_pending_pg_states]
-                    if len(set(previous_penging_pg_names).difference(set(all_new_penging_pg_names))) == 0:
-                        self._inner_check_pd_deployment()
-                    previous_penging_pg_names = all_new_penging_pg_names
-                else:
-                    previous_penging_pg_names = all_penging_pg_names
-
-                await asyncio.sleep(interval)
-            # pylint: disable=broad-except
-            except Exception as e:
-                logger.error("Unexpected exception: {}".format(e))
-                logger.error("Exception traceback: {}".format(traceback.format_exc()))
-
-    async def _check_deployment_states_loop(self, interval: float) -> None:
-        async def watch_instance_deployment_states(instance_id: str):
-            # There might be some delays of calling _init_server_and_instance, so sleep first.
-            await asyncio.sleep(WATCH_DEPLOYMENT_INTERVAL)
-            wait_pending_instance_time = 0.0
-            while True:
-                instance_state = list_actors(filters=[("name", "=", get_instance_name(instance_id))])
-                instance_pending_creation = len(instance_state) == 1 and instance_state[0][
-                    "state"] == "PENDING_CREATION"
-                if not instance_pending_creation:
-                    break
-                await asyncio.sleep(WATCH_DEPLOYMENT_INTERVAL)
-                wait_pending_instance_time += WATCH_DEPLOYMENT_INTERVAL
-                if wait_pending_instance_time >= WATCH_DEPLOYMENT_INTERVAL_PENDING_INSTANCE:
-                    break
-            pg_created, server_alive, instance_alive = self.launcher.get_instance_deployment_states(instance_id)
-            if pg_created and (not server_alive or not instance_alive):
-                logger.warning("Instance {} deployment states incorrect, states: (pg {}, server {}, instance {})"
-                               .format(instance_id, pg_created, server_alive, instance_alive))
-                self.scale_down(instance_id)
-
-        while True:
-            try:
-                curr_pgs, curr_servers, curr_instances = self.launcher.get_cluster_deployment()
-                assert len(curr_pgs) >= max(len(curr_servers), len(curr_instances))
-                tasks = []
-                for instance_id in curr_pgs:
-                    if instance_id not in curr_servers or instance_id not in curr_instances:
-                        tasks.append(asyncio.create_task(watch_instance_deployment_states(instance_id)))
-                await asyncio.gather(*tasks, return_exceptions=True)
-                await asyncio.sleep(interval)
-            # pylint: disable=broad-except
-            except Exception as e:
-                logger.error("Unexpected exception: {}".format(e))
-                logger.error("Exception traceback: {}".format(traceback.format_exc()))
 
     async def is_ready(self) -> bool:
         """Called by api server, return true when all the instances have been successfully created."""

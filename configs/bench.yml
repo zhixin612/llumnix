@@ -16,10 +16,10 @@ MANAGER:
   # Time interval(s) to update instance info and pair migration
   #    1/POLLING_INTERVAL may not smaller than QPS, otherwise, the migration will be not precise.
   #    since migration policy cannot push pairs (P0->D0 P1->D0) if D0 is underloaded
-  POLLING_INTERVAL: 0.05
+  POLLING_INTERVAL: 0.5
   LOG_INSTANCE_INFO: True  # Zhixin: board will be enabled only when this is True
-  LOG_FILENAME: "/root/llm/disagg/llumnix/examples/logs/test/test_0414"
-  ENABLE_TENSORBOARD: True
+  LOG_FILENAME: "/root/llm/disagg/llumnix/examples/logs/test-minimal-overhead/test"
+  ENABLE_TENSORBOARD: False
 
   INITIAL_INSTANCES: 1  # Zhixin
   ENABLE_PD_DISAGG: True  # Zhixin

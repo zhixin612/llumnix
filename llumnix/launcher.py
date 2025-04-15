@@ -153,9 +153,8 @@ class Launcher:
             "Currently not support engine based pd-disaggregation in global launch mode."
 
         next_instance_args: InstanceArgs = copy.deepcopy(instance_args)
-        cur_num_prefill = len(self.global_scheduler.dispatch_scheduler.available_dispatch_instance_set)
-        cur_num_decode = len(self.global_scheduler.instance_id_set -
-                                self.global_scheduler.dispatch_scheduler.available_dispatch_instance_set)
+        cur_num_prefill = len(self.global_scheduler.instance_ids_prefill)
+        cur_num_decode = len(self.global_scheduler.instance_ids_decode)
         next_instance_args.instance_type = self._get_next_instance_type(cur_num_prefill, cur_num_decode, self.pd_ratio)
         return next_instance_args
 
@@ -201,6 +200,7 @@ class Launcher:
         next_instance_args = self._get_next_instance_args(instance_args)
         instance = self.init_instance(instance_id, instance_id_str, next_instance_args, placement_group,
                                        request_output_queue_type, backend_type, engine_args)
+
         next_entrypoints_args = self._get_next_entrypoints_args(entrypoints_args)
         server = self.init_server(get_server_name(instance_id), placement_group, next_entrypoints_args)
 

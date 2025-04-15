@@ -48,6 +48,8 @@ class GlobalScheduler:
     def pair_migration(self, pair_migration_type: PairMigrationConstraints) -> List[Tuple[str, str]]:
         # minimal overhead migration: p -> rand(D)
         assert pair_migration_type == PairMigrationConstraints.PREFILL_2_DECODING, "Only P2D is supported."
+        if len(self.instance_ids_prefill) == 0 or len(self.instance_ids_decode) == 0:
+            return []
         migrate_instance_pairs = []
         for instance_id in self.instance_ids_prefill:
             dst_instance_id = np.random.choice(self.instance_ids_decode)

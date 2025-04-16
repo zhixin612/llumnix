@@ -220,7 +220,8 @@ def calculate_throughput(
     # print(f'self-reported {list(sorted(cf_gen_lens))}')
     for prompt, response, expected_response_len in zip(prompt_ids, response_ids, expected_response_lens):
         if len(response) == expected_response_len:
-            print(f'[INFO] check lens {len(prompt)=} {len(response)=} {expected_response_len=}')
+            # print(f'[INFO] check lens {len(prompt)=} {len(response)=} {expected_response_len=}')
+            ...
         else:
             print(f'[WARN] check lens {len(prompt)=} {len(response)=} {expected_response_len=}')
 

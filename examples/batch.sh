@@ -28,12 +28,11 @@ echo "[WARNING] Start GPU monitor on devices: $CUDA_VISIBLE_DEVICES"
 
 
 #------------------------------------------------------------------------------------------------------------------
-python ../benchmark/bench_plus.py \
-    --ip_ports "${IP_PORTS[@]}" \
-    --tokenizer $MODEL_PATH \
+python ../benchmark/bench_plus.py --ip_ports "${IP_PORTS[@]}" --tokenizer $MODEL_PATH \
+    --log_latencies  --fail_on_response_failure \
+    --max_request_len       8192 \
     --random_prompt_count   1000 \
     --warmup_request_count  50 \
-    --max_request_len       8192 \
     --gen_random_prompts \
     --random_prompt_lens_distribution "uniform" \
     --random_prompt_lens_mean  256 \
@@ -44,18 +43,16 @@ python ../benchmark/bench_plus.py \
     --random_response_lens_range 0 \
     --qps                   4 \
     --distribution          "uniform" \
-    --log_latencies \
-    --fail_on_response_failure \
-    --log_dir               "./logs/test-minimal-overhead/fix-256-256-Q4-1P1D-NCCL"
+    --log_dir               "./logs/test-minimal-overhead/naive-256-256-Q4-1P1D-NCCL"
 sleep 10
 
+
 #------------------------------------------------------------------------------------------------------------------
-python ../benchmark/bench_plus.py \
-    --ip_ports "${IP_PORTS[@]}" \
-    --tokenizer $MODEL_PATH \
+python ../benchmark/bench_plus.py --ip_ports "${IP_PORTS[@]}" --tokenizer $MODEL_PATH \
+    --log_latencies  --fail_on_response_failure \
+    --max_request_len       8192 \
     --random_prompt_count   1000 \
     --warmup_request_count  50 \
-    --max_request_len       8192 \
     --gen_random_prompts \
     --random_prompt_lens_distribution "uniform" \
     --random_prompt_lens_mean  256 \
@@ -66,18 +63,16 @@ python ../benchmark/bench_plus.py \
     --random_response_lens_range 0 \
     --qps                   8 \
     --distribution          "uniform" \
-    --log_latencies \
-    --fail_on_response_failure \
-    --log_dir               "./logs/test-minimal-overhead/fix-256-256-Q8-1P1D-NCCL"
+    --log_dir               "./logs/test-minimal-overhead/naive-256-256-Q8-1P1D-NCCL"
 sleep 10
 
+
 #------------------------------------------------------------------------------------------------------------------
-python ../benchmark/bench_plus.py \
-    --ip_ports "${IP_PORTS[@]}" \
-    --tokenizer $MODEL_PATH \
+python ../benchmark/bench_plus.py --ip_ports "${IP_PORTS[@]}" --tokenizer $MODEL_PATH \
+    --log_latencies  --fail_on_response_failure \
+    --max_request_len       8192 \
     --random_prompt_count   1000 \
     --warmup_request_count  50 \
-    --max_request_len       8192 \
     --gen_random_prompts \
     --random_prompt_lens_distribution "uniform" \
     --random_prompt_lens_mean  256 \
@@ -88,7 +83,86 @@ python ../benchmark/bench_plus.py \
     --random_response_lens_range 0 \
     --qps                   16 \
     --distribution          "uniform" \
-    --log_latencies \
-    --fail_on_response_failure \
-    --log_dir               "./logs/test-minimal-overhead/fix-256-256-Q16-1P1D-NCCL"
+    --log_dir               "./logs/test-minimal-overhead/naive-256-256-Q16-1P1D-NCCL"
+sleep 10
+
+
+
+#------------------------------------------------------------------------------------------------------------------
+python ../benchmark/bench_plus.py --ip_ports "${IP_PORTS[@]}" --tokenizer $MODEL_PATH \
+    --log_latencies  --fail_on_response_failure \
+    --max_request_len       8192 \
+    --random_prompt_count   1000 \
+    --warmup_request_count  50 \
+    --gen_random_prompts \
+    --random_prompt_lens_distribution "uniform" \
+    --random_prompt_lens_mean  1024 \
+    --random_prompt_lens_range 0 \
+    --allow_random_gen_len \
+    --random_response_lens_distribution "uniform" \
+    --random_response_lens_mean  256 \
+    --random_response_lens_range 0 \
+    --qps                   4 \
+    --distribution          "uniform" \
+    --log_dir               "./logs/test-minimal-overhead/naive-1k-256-Q4-1P1D-NCCL"
+sleep 10
+
+
+#------------------------------------------------------------------------------------------------------------------
+python ../benchmark/bench_plus.py --ip_ports "${IP_PORTS[@]}" --tokenizer $MODEL_PATH \
+    --log_latencies  --fail_on_response_failure \
+    --max_request_len       8192 \
+    --random_prompt_count   1000 \
+    --warmup_request_count  50 \
+    --gen_random_prompts \
+    --random_prompt_lens_distribution "uniform" \
+    --random_prompt_lens_mean  1024 \
+    --random_prompt_lens_range 0 \
+    --allow_random_gen_len \
+    --random_response_lens_distribution "uniform" \
+    --random_response_lens_mean  256 \
+    --random_response_lens_range 0 \
+    --qps                   8 \
+    --distribution          "uniform" \
+    --log_dir               "./logs/test-minimal-overhead/naive-1k-256-Q8-1P1D-NCCL"
+sleep 10
+
+
+#------------------------------------------------------------------------------------------------------------------
+python ../benchmark/bench_plus.py --ip_ports "${IP_PORTS[@]}" --tokenizer $MODEL_PATH \
+    --log_latencies  --fail_on_response_failure \
+    --max_request_len       8192 \
+    --random_prompt_count   1000 \
+    --warmup_request_count  50 \
+    --gen_random_prompts \
+    --random_prompt_lens_distribution "uniform" \
+    --random_prompt_lens_mean  128 \
+    --random_prompt_lens_range 0 \
+    --allow_random_gen_len \
+    --random_response_lens_distribution "uniform" \
+    --random_response_lens_mean  128 \
+    --random_response_lens_range 0 \
+    --qps                   12 \
+    --distribution          "uniform" \
+    --log_dir               "./logs/test-minimal-overhead/naive-128-128-Q12-1P1D-NCCL"
+sleep 10
+
+
+#------------------------------------------------------------------------------------------------------------------
+python ../benchmark/bench_plus.py --ip_ports "${IP_PORTS[@]}" --tokenizer $MODEL_PATH \
+    --log_latencies  --fail_on_response_failure \
+    --max_request_len       8192 \
+    --random_prompt_count   1000 \
+    --warmup_request_count  50 \
+    --gen_random_prompts \
+    --random_prompt_lens_distribution "uniform" \
+    --random_prompt_lens_mean  128 \
+    --random_prompt_lens_range 0 \
+    --allow_random_gen_len \
+    --random_response_lens_distribution "uniform" \
+    --random_response_lens_mean  128 \
+    --random_response_lens_range 0 \
+    --qps                   30 \
+    --distribution          "uniform" \
+    --log_dir               "./logs/test-minimal-overhead/naive-128-128-Q30-1P1D-NCCL"
 sleep 10

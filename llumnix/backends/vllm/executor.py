@@ -281,7 +281,7 @@ class SimGPUExecutor(RayGPUExecutor):
     def _init_executor(self) -> None:
         pass
 
-    def determine_num_available_blocks(self) -> Tuple[int, int]:
+    def determine_num_available_blocks(self, engine_type='no_constraints') -> Tuple[int, int]:
         num_gpu_blocks = self.latency_mem.cache_dict.get(self.sim_cache_config, 880)
         num_cpu_blocks = 2048
         return (num_gpu_blocks, num_cpu_blocks)

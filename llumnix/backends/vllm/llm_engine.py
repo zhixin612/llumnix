@@ -97,7 +97,8 @@ class LLMEngineLlumnix(_AsyncLLMEngine):
         migration_config: MigrationConfig,
         engine_args: EngineArgs,
         latency_mem: Optional[LatencyMemData] = None,
-        usage_context: UsageContext = UsageContext.ENGINE_CONTEXT
+        usage_context: UsageContext = UsageContext.ENGINE_CONTEXT,
+        engine_type: str = 'no_constraints',
     ) -> "LLMEngineLlumnix":
         """Creates an LLM engine from the engine arguments."""
         # Create the engine configs.
@@ -125,6 +126,7 @@ class LLMEngineLlumnix(_AsyncLLMEngine):
             executor_class=executor_class,
             log_stats=not engine_args.disable_log_stats,
             usage_context=usage_context,
+            engine_type=engine_type,  # [Zhixin] PD mem
         )
         return engine
 
@@ -293,12 +295,14 @@ class BackendVLLM(BackendInterface):
         request_output_queue_type: QueueType,
         migration_config: MigrationConfig,
         engine_args: EngineArgs,
+        engine_type: str = 'no_constraints',
     ) -> None:
         self.engine: LLMEngineLlumnix = LLMEngineLlumnix.from_engine_args(engine_args=engine_args,
                                                                           request_output_queue_type=request_output_queue_type,
                                                                           migration_config=migration_config,
                                                                           instance_id=instance_id,
-                                                                          placement_group=placement_group)
+                                                                          placement_group=placement_group,
+                                                                          engine_type=engine_type)
         self.engine.scheduler = [SchedulerLlumnix(self.engine.scheduler_config, self.engine.cache_config, self.engine.lora_config)
                                  for _ in range(engine_args.pipeline_parallel_size)]
         for vid in range(engine_args.pipeline_parallel_size):

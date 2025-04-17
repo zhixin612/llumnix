@@ -73,7 +73,8 @@ class Llumlet:
                                                                         migration_config,
                                                                         backend_type,
                                                                         engine_args,
-                                                                        instance_args.profiling_result_file_path)
+                                                                        instance_args.profiling_result_file_path,
+                                                                        instance_args.instance_type)
             self.migration_coordinator = MigrationCoordinator(self.backend_engine,
                                                               migration_config.migration_last_stage_max_blocks,
                                                               migration_config.migration_max_stages)

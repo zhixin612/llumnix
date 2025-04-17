@@ -77,7 +77,8 @@ def init_backend_engine(instance_id: str,
                         migration_config: MigrationConfig,
                         backend_type: BackendType,
                         engine_args,
-                        profiling_result_file_path: str = None) -> BackendInterface:
+                        profiling_result_file_path: str = None,
+                        engine_type: str = 'no_constraints') -> BackendInterface:
     if backend_type == BackendType.VLLM:
         # pylint: disable=import-outside-toplevel
         from llumnix.backends.vllm.llm_engine import BackendVLLM
@@ -85,7 +86,8 @@ def init_backend_engine(instance_id: str,
                                         placement_group,
                                         request_output_queue_type,
                                         migration_config,
-                                        engine_args)
+                                        engine_args,
+                                        engine_type)
     elif backend_type == BackendType.BLADELLM:
         # pylint: disable=import-outside-toplevel
         from llumnix.backends.bladellm.llm_engine import BackendBladeLLM

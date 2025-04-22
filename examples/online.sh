@@ -9,6 +9,10 @@ export CUDA_VISIBLE_DEVICES=0,1
 export RAY_DEDUP_LOGS=0
 
 echo "[WARNING] Start serving on devices: $CUDA_VISIBLE_DEVICES"
+#echo "[WARNING] using enforce eager mode"
+
+#export VLLM_USE_RAY_SPMD_WORKER=1
+#export VLLM_USE_RAY_COMPILED_DAG=1
 
 HEAD_NODE=1 python -m llumnix.entrypoints.vllm.serve \
                 --config-file $CONFIG_PATH \
@@ -17,5 +21,5 @@ HEAD_NODE=1 python -m llumnix.entrypoints.vllm.serve \
                 --max-model-len 32768 \
                 --gpu-memory-utilization 0.95 \
                 --max-num-seqs 1024 \
-                --max-num-batched-tokens 200000
+                --max-num-batched-tokens 200000 \
 #                --enforce-eager

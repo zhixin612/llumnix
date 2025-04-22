@@ -37,7 +37,7 @@ python ../benchmark/bench_plus.py \
     --max_request_len       8192 \
     --gen_random_prompts \
     --random_prompt_lens_distribution "uniform" \
-    --random_prompt_lens_mean  1024 \
+    --random_prompt_lens_mean  256 \
     --random_prompt_lens_range 0 \
     --allow_random_gen_len \
     --random_response_lens_distribution "uniform" \
@@ -47,7 +47,9 @@ python ../benchmark/bench_plus.py \
     --distribution          "uniform" \
     --log_latencies \
     --fail_on_response_failure \
-    --log_dir               "./logs/test-minimal-overhead/mini_bench-1k-256-Q8-1P1D-NCCL-bs3e5-seq1k"
+    --log_dir               "./logs/test/test_0421"
+#    --log_dir               "./logs/test/overload-test-256-256-Q24"
+#    --log_dir               "./logs/test-minimal-overhead/mini_bench-1k-256-Q8-1P1D-NCCL-bs3e5-seq1k"
 #    --log_dir               "./logs/bench-migration-0402-sct/mig-sct-bw_exp-128-512_exp-512-4k_uni-Q6-500_2P4D"
 #    --log_dir               "./logs/bench-migration-0331-pred/mig-pred-remain_exp-128-512_exp-384-1024_uni-Q6-1K_1P3D"
 #    --log_dir               "./logs/0327-llumnix-base-benchmark/batch_size_check_1P1D_B1"
